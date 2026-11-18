@@ -1,0 +1,31 @@
+{
+  "id": "/",
+  "name": "Bunshō 文章 — Japanese Sentence Study",
+  "short_name": "Bunshō",
+  "description": "Beginner Japanese sentence immersion and spaced-repetition flashcard study covering CEFR A1.1 to A1.2 with contextual furigana, native audio, and Shodō brush calligraphy.",
+  "theme_color": "#C83E2B",
+  "background_color": "#F7F3EB",
+  "display": "standalone",
+  "start_url": "/",
+  "scope": "/",
+  "icons": [
+    {
+      "src": "/pwa-192x192.png",
+      "sizes": "192x192",
+      "type": "image/png",
+      "purpose": "any"
+    },
+    {
+      "src": "/pwa-512x512.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "any"
+    },
+    {
+      "src": "/pwa-maskable-512x512.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "maskable"
+    }
+  ]
+}
