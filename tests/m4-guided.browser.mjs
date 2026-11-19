@@ -25,11 +25,21 @@ for(const engine of [chromium,firefox,webkit]){
    const {createInitialAppState}=await import('/bunshou/src/utils/storage.ts');
    return makeLesson(createInitialAppState(),'a11-u01','2026-11-19');
   });
-  const next=()=>page.getByRole('button',{name:'Continue exercise'}).click();
+  const next=async()=>{
+   await page.getByRole('button',{name:'Continue exercise'}).click();
+   await page.getByText('Saved on this device',{exact:false}).waitFor();
+  };
   await page.getByRole('button',{name:'Start guided exercises'}).click();
   await page.getByRole('radio').nth(1-tasks[0].correct).check();
   await page.getByRole('button',{name:'Check answer'}).click();
   await page.getByText('Not the expected answer',{exact:true}).waitFor();await next();
+  // Await the submitted checkpoint, not merely a click dispatched to React.
+  await page.getByText('Context comprehension · 2/6',{exact:true}).waitFor();
+  const checkpoint=await page.evaluate(async()=>{
+   const {WorkspaceStore}=await import('/bunshou/src/storage/workspace.ts');
+   const store=await WorkspaceStore.open();try{return (await store.read('guest')).guided.units['a11-u01'].last;}finally{store.close();}
+  });
+  assert.equal(checkpoint.index,1);assert.equal(checkpoint.first['a11-u01:grammar'],'missed');
   await page.reload();await page.getByRole('button',{name:'Start guided lesson',exact:true}).click();
   await page.getByText('Context comprehension · 2/6',{exact:true}).waitFor();
   await page.getByRole('radio').nth(tasks[1].correct).check();
@@ -61,7 +71,8 @@ for(const engine of [chromium,firefox,webkit]){
   await page.getByText('Current result: 6/6 correct · 0 assisted · 0 missed.',{exact:true}).waitFor();
   await page.getByText('First pass: 4/6 model matches or correct answers; 1 assisted; 1 missed.',{exact:true}).waitFor();
   await page.getByRole('button',{name:'Record completed practice session'}).click();
-  await page.getByRole('button',{name:'Export saved progress'}).waitFor();
+  await page.getByRole('button',{name:'Practice activity recorded'}).waitFor();
+  await page.getByText('Saved on this device',{exact:false}).waitFor();
   const pending=page.waitForEvent('download');await page.getByRole('button',{name:'Export saved progress'}).click();
   const d=await pending;const saved=JSON.parse(await readFile(await d.path(),'utf8'));
   assert.equal(Object.keys(saved.records).length,0);
@@ -71,6 +82,10 @@ for(const engine of [chromium,firefox,webkit]){
   await page.getByRole('heading',{name:'Guided practice results'}).waitFor();
   assert.equal(await page.getByRole('button',{name:'Practice activity recorded'}).isDisabled(),true);
   await page.getByText('1 recorded sessions · 4/6 first-pass correct answers',{exact:true}).waitFor();
+  const evidenceDownload=page.waitForEvent('download');await page.getByRole('button',{name:'Export guided learning evidence'}).click();
+  const evidenceFile=await evidenceDownload;const exported=JSON.parse(await readFile(await evidenceFile.path(),'utf8'));
+  assert.equal(exported.version,1);assert.equal(exported.units['a11-u01'].sessions,1);assert.equal(exported.units['a11-u01'].firstCorrect,4);
+  assert.equal(exported.units['a11-u01'].last.logged,true);assert.equal(saved.guided,undefined);
   await page.getByRole('button',{name:'Explore next unit'}).click();
   assert.equal(await page.getByLabel('Choose any unit').inputValue(),'a11-u02');
   await page.getByLabel('Choose any unit').selectOption('a12-u10');
@@ -86,10 +101,18 @@ for(const engine of [chromium,firefox,webkit]){
     let stale=false,cancelled=false;
     try{await other.guidedCommand(a,0,cmd,()=>true);}catch{stale=true;}
     try{await other.guidedCommand(b,0,cmd,()=>false);}catch{cancelled=true;}
-    return {stale,cancelled,a:row.guided.units['a11-u02'].last.id,b:(await other.read(b)).guided,guest:(await other.read('guest')).guided.units['a11-u01'].sessions};
+    const {decode}=await import('/bunshou/src/storage/workspace.ts');
+    const state=decode(row.raw);state.settings.dailyNewTarget=20;
+    const edited=await store.commit(a,row.revision,state);
+    assert.deepEqual(edited.guided,row.guided);
+    const guest=await other.read('guest');
+    const claimed=await store.claimGuest(b,guest.revision,0,()=>true);
+    assert.deepEqual(claimed.guided,guest.guided);
+    assert.equal((await other.read('guest')).guided,undefined);
+    return {stale,cancelled,a:edited.guided.units['a11-u02'].last.id,b:claimed.guided.units['a11-u01'].sessions,guest:guest.guided.units['a11-u01'].sessions};
    }finally{store.close();other.close();}
   });
-  assert.ok(evidence.stale&&evidence.cancelled&&evidence.a);assert.equal(evidence.b,undefined);assert.equal(evidence.guest,1);
+  assert.ok(evidence.stale&&evidence.cancelled&&evidence.a);assert.equal(evidence.b,1);assert.equal(evidence.guest,1);
   assert.deepEqual(errors,[]);
   await context.close();
   console.log(engine.name()+': M4 guided grammar, context, audio gate/fallback, typed production, targeted retest, one durable practice log, reload/resume, owner isolation, stale revision rejection and unchanged SRS PASS');

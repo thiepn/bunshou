@@ -26,3 +26,14 @@ test('invalid task identity, duplicate sentence and foreign unit cannot resume',
  const corrupt=structuredClone(p);corrupt.units[u].last.ids[0]='a12-u10-01';assert.equal(validProgression(corrupt),false);
  const duplicate=structuredClone(p);duplicate.units[u].last.ids[0]=duplicate.units[u].last.ids[1];assert.equal(validProgression(duplicate),false);
 });
+
+test('corrected first-pass listening difficulty is retained for next session',()=>{
+ let p=startSession(emptyProgression(),u,s,day,id);
+ const tasks=tasksFor(p.units[u].last,s),weak=tasks[2].sentence!.id;
+ for(const t of tasks)p=applyCommand(p,{kind:'answer',unitId:u,id,taskId:t.id,result:t.id===tasks[2].id?'assisted':'correct'},s).progress;
+ p=applyCommand(p,{kind:'retry',unitId:u,id},s).progress;
+ p=applyCommand(p,{kind:'answer',unitId:u,id,taskId:tasks[2].id,result:'correct'},s).progress;
+ p=applyCommand(p,{kind:'record',unitId:u,id},s).progress;
+ const next=startSession(p,u,s,day,'22222222-2222-4222-8222-222222222222');
+ assert.equal(next.units[u].last.ids[0],weak);
+});
