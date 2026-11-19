@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import {lexical,parseFragment,fragment,link} from './contract';
 import {examples,resumeReference} from './corpus';
-import {progressSummary} from './progress';
+import {progressSummary,parseSummary} from './progress';
 import {createInitialAppState} from '../utils/storage';
 import {scheduleSentenceReview} from '../utils/srs';
 test('public references round trip, refuse unknown versions, duplicate fields and arbitrary URLs',()=>{
@@ -28,4 +28,10 @@ test('progress summary contains only real aggregate counts and safe public resum
  assert.equal(resumeReference(s,'2026-11-19').kind,'review');
  assert.equal(JSON.stringify(result).includes('private'),false);
  assert.deepEqual(Object.keys(result).sort(),['metrics','product','resumeUrl','schema','scope','version']);
+});
+
+test('hub consumer accepts only bounded aggregate snapshots and validated resume references',()=>{
+ const s=progressSummary(createInitialAppState(),'2026-11-19');
+ assert.deepEqual(parseSummary(s),s);
+ for(const candidate of [{...s,owner:'private'},{...s,metrics:{...s.metrics,records:{}}},{...s,metrics:{...s.metrics,reviewsDue:999}},{...s,resumeUrl:'https://evil.invalid/'},{...s,resumeUrl:s.resumeUrl+'%26owner%3Dprivate'},{...s,version:2}])assert.equal(parseSummary(candidate),null);
 });

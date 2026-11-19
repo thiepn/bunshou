@@ -7,6 +7,15 @@ for(const engine of [chromium,firefox,webkit]){
  try{
   const context=await browser.newContext({acceptDownloads:true});
   const page=await context.newPage();
+  await context.route('https://japanese.thiepn.dev/**',async route=>{
+   const u=new URL(route.request().url());
+   if(!['/','/kotoba/','/bunshou/'].includes(u.pathname)||!route.request().isNavigationRequest())return route.abort();
+   const target=u.pathname==='/bunshou/'?base:base+'tests/m3-partner-fixture.html';
+   // Browser URL fragments are not sent in HTTP requests. Read location.hash
+   // in the fulfilled document, then preserve it in the local navigation.
+   const pageKind=u.pathname==='/kotoba/'?'kotoba':'japanese';
+   return route.fulfill({status:200,contentType:'text/html',body:'<script>location.replace('+JSON.stringify(target+(u.pathname==='/bunshou/'?'':'?partner='+pageKind))+'+location.hash)</script>'});
+  });
   const ref='#jv=1&kind=vocabulary&text='+encodeURIComponent('学生');
   await page.goto(base+ref);
   await page.getByRole('heading',{name:'Context & Japanese ecosystem'}).waitFor();
@@ -14,9 +23,13 @@ for(const engine of [chromium,firefox,webkit]){
   const href=await page.getByRole('link',{name:'Look up 学生 in Kotoba'}).getAttribute('href');
   assert.equal(new URL(href).pathname,'/kotoba/');
   assert.ok(await page.getByRole('button',{name:'Practice this sentence'}).count()>0);
-  // Disposable Kotoba consumer receives public handoff without remote traffic.
-  const received=await page.evaluate(async href=>{const {parseFragment}=await import('/bunshou/src/interop/contract.ts');return parseFragment(new URL(href).hash);},href);
-  assert.deepEqual(received,{v:1,kind:'vocabulary',text:'学生'});
+  // User actually follows the public handoff to an intercepted disposable partner.
+  await page.getByRole('link',{name:'Look up 学生 in Kotoba'}).click();
+  await page.getByRole('heading',{name:'Disposable Kotoba'}).waitFor();
+  await page.getByText('Lookup request: 学生',{exact:true}).waitFor();
+  await page.getByRole('link',{name:'Find example sentences in Bunshō'}).click();
+  await page.getByRole('heading',{name:'Context & Japanese ecosystem'}).waitFor();
+  await page.getByText('Look up 学生 in Kotoba',{exact:true}).waitFor();
   await page.goto(base+'#jv=1&kind=sentence&id=a11-u01-01');
   await page.getByText('Good morning.',{exact:true}).waitFor();
   await page.getByRole('button',{name:'Practice this sentence'}).click();
@@ -25,10 +38,20 @@ for(const engine of [chromium,firefox,webkit]){
   const d=await download;const summary=JSON.parse(await readFile(await d.path(),'utf8'));
   assert.equal(summary.schema,'thiepn.japanese.progress');assert.equal(summary.version,1);assert.equal(summary.product,'bunshou');assert.equal(summary.metrics.sentencesAvailable,620);assert.equal(summary.metrics.sentencesStudied,0);
   assert.equal(new URL(summary.resumeUrl).pathname,'/bunshou/');
-  // Mock hub snapshot consumer: replace by product, never add counts twice.
-  const hub=new Map();hub.set(summary.product,summary);hub.set(summary.product,summary);
-  assert.equal(hub.size,1);assert.equal(hub.get('bunshou').metrics.sentencesStudied,0);
-  await page.goto(base+new URL(summary.resumeUrl).hash);
+  await page.goto(base+'tests/m3-partner-fixture.html?partner=japanese');
+  await page.getByRole('heading',{name:'Disposable Japanese hub'}).waitFor();
+  const input=page.getByLabel('Import Bunshō aggregate snapshot');
+  const payload={name:'summary.json',mimeType:'application/json',buffer:Buffer.from(JSON.stringify(summary))};
+  await input.setInputFiles(payload);
+  await page.getByText('0 / 620 sentences studied',{exact:true}).waitFor();
+  await input.setInputFiles([]);
+  await input.setInputFiles(payload);
+  await page.getByText('0 / 620 sentences studied',{exact:true}).waitFor();
+  await input.setInputFiles({name:'invalid.json',mimeType:'application/json',buffer:Buffer.from(JSON.stringify({...summary,owner:'private'}))});
+  await page.getByText('Invalid or unsupported snapshot',{exact:true}).waitFor();
+  await input.setInputFiles(payload);
+  await page.getByText('Imported device snapshot — not verified Account progress',{exact:true}).waitFor();
+  await page.getByRole('link',{name:'Resume Bunshō'}).click();
   await page.getByRole('button',{name:'Export ecosystem summary'}).waitFor();
   await page.goto(base+'#jv=1&kind=sentence&id=constructor');
   await page.getByText('0 contextual examples.',{exact:false}).waitFor();

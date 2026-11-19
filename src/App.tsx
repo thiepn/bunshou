@@ -248,6 +248,7 @@ export default function App({appState,setAppState}: {appState: PersistedAppState
   }, [undoStack, setAppState]);
 
   const handleStartStudy = useCallback((config: StudyLaunchConfig) => {
+    if(location.hash.startsWith('#jv='))history.replaceState(null,'',location.pathname+location.search);
     setStudyLaunchConfig(config);
     setActiveScreen('study');
   }, []);
@@ -286,6 +287,7 @@ export default function App({appState,setAppState}: {appState: PersistedAppState
   );
 
   const handleOpenUnitGrammar = useCallback((unitId: string) => {
+    if(location.hash.startsWith('#jv='))history.replaceState(null,'',location.pathname+location.search);
     setGrammarInitialUnitId(unitId);
     setActiveScreen('grammar');
   }, []);
