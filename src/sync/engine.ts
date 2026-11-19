@@ -1,5 +1,5 @@
 import {WorkspaceStore,GUEST,type Envelope} from '../storage/workspace';
-import {buildMutation,reconcile,type Remote,remoteRaw} from './model';
+import {buildMutation,reconcile,type Remote,remoteRaw,withDevice,change} from './model';
 import type {SyncTransport} from './transport';
 export type SyncResult='synced'|'pending'|'conflict';
 /** Foreground, bounded cycle. Metadata and state use the same IDB transaction.
@@ -25,7 +25,14 @@ export async function synchronize(store:WorkspaceStore,owner:string,transport:Sy
    }
   }
   // Pull pages before creating any new mutation, including after acknowledgement.
-  const current=row.sync!,page=await transport.pull(current.deviceId,current.cursor);
+  const current=row.sync!;
+  let page=await transport.pull(current.deviceId,current.cursor);
+  if(current.cursor===null||page.resetRequired){
+   const snapshot=await transport.bootstrap(current.deviceId);
+   await write((r,x)=>{const merged=reconcile(r.raw,x,snapshot.remote);return merged.meta.conflict?merged:{raw:merged.raw,meta:{...merged.meta,cursor:snapshot.cursor}};});
+   if(row.sync!.conflict)return 'conflict';
+   continue; // catch changes after the snapshot watermark before any push
+  }
   await write((r,x)=>{
    // A push acknowledgement may be ahead of an older pull page.
    const merged=page.remote&&page.remote.revision>=x.remote.revision?reconcile(r.raw,x,page.remote):{raw:r.raw,meta:x};
@@ -46,6 +53,15 @@ export async function acceptRemote(store:WorkspaceStore,owner:string,revision:nu
  return store.updateSync(owner,revision,stillCurrent,(r,m)=>{
   if(!m.conflict)throw Error('SYNC_NO_CONFLICT');
   const remote=m.conflict.remote;
-  return {raw:remoteRaw(remote),meta:{...m,remote,pending:[],flight:undefined,conflict:undefined,archives:[...(m.archives??[]),{...m.conflict,localRaw:r.raw,pending:m.pending}]}};
+  return {raw:withDevice(remoteRaw(remote),r.raw),meta:{...m,remote,pending:[],flight:undefined,conflict:undefined,archives:[...(m.archives??[]),{...m.conflict,localRaw:r.raw,pending:m.pending}]}};
+ });
+}
+
+/** Explicit ordinary conflict resolution. Never allow stale destructive resurrection. */
+export async function keepLocal(store:WorkspaceStore,owner:string,revision:number,stillCurrent:()=>boolean):Promise<Envelope>{
+ return store.updateSync(owner,revision,stillCurrent,(r,m)=>{
+  if(!m.conflict||m.conflict.reason==='REMOTE_REPLACEMENT_OR_DELETION')throw Error('SYNC_EXPLICIT_IMPORT_REQUIRED');
+  const remote=m.conflict.remote;
+  return {raw:r.raw,meta:{...m,remote,flight:undefined,conflict:undefined,pending:[...m.pending,change({kind:'replace'})],archives:[...(m.archives??[]),{...m.conflict,localRaw:r.raw,pending:m.pending}]}};
  });
 }

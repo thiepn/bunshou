@@ -1,4 +1,4 @@
-import {appendLocal,initialMeta, type Action,type SyncMeta} from '../sync/model';
+import {appendLocal,initialMeta,syncRelevant, type Action,type SyncMeta} from '../sync/model';
 import type { PersistedAppState } from '../types/curriculum';
 import { createInitialAppState, validateAndParseBackupJson, STORAGE_KEY } from '../utils/storage';
 
@@ -91,7 +91,7 @@ export class WorkspaceStore {
       if ((current?.revision ?? 0)!==revision || (current && current.owner!==owner)) throw new WorkspaceError('REVISION_CONFLICT');
       if(current) decode(current.raw);
       if(current?.raw===raw) return current;
-      const next: Envelope={owner,revision:revision+1,raw,previousRaw:current?.raw,legacyRaw:current?.legacyRaw,claimedFrom:current?.claimedFrom,claimSourceRaw:current?.claimSourceRaw,sync:owner===GUEST?undefined:appendLocal(current?.sync,action,!!current)};
+      const next: Envelope={owner,revision:revision+1,raw,previousRaw:current?.raw,legacyRaw:current?.legacyRaw,claimedFrom:current?.claimedFrom,claimSourceRaw:current?.claimSourceRaw,sync:owner===GUEST?undefined:action.kind==='edit'&&!syncRelevant(current?.raw??initialRaw(),raw)?current?.sync??initialMeta():appendLocal(current?.sync,action,!!current)};
       await request(store.put(next)); return next;
     });
   }

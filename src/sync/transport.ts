@@ -2,15 +2,17 @@ import {APP_ID,RESOURCE,RESOURCE_ID,type Mutation,type Remote,validateDocument} 
 export type Credentials={owner:string;bearer:string};
 export interface SyncTransport{
  push(deviceId:string,mutation:Mutation):Promise<{status:'applied'|'already_applied'|'conflict';revision?:number}>;
- pull(deviceId:string,cursor:string|null):Promise<{remote?:Remote;cursor:string;hasMore:boolean}>;
+ pull(deviceId:string,cursor:string|null):Promise<{remote?:Remote;cursor:string;hasMore:boolean;resetRequired?:boolean}>;
+ bootstrap(deviceId:string):Promise<{remote:Remote;cursor:string}>;
 }
 /** Explicitly injected development endpoint. No production endpoint/default. */
 export function createTransport(endpoint:string,authorize:()=>Promise<Credentials>,expectedOwner:string,stillCurrent:()=>boolean):SyncTransport{
  const url=new URL(endpoint);
- if(!['localhost','127.0.0.1','[::1]'].includes(url.hostname)||url.protocol!=='http:')throw Error('SYNC_DEVELOPMENT_ENDPOINT_ONLY');
+ if(!['http://127.0.0.1:4174','https://bunshou-m2-fixture.invalid'].includes(url.origin)||url.username||url.password)throw Error('SYNC_DEVELOPMENT_ENDPOINT_ONLY');
  async function post(path:string,data:unknown){
   if(!stillCurrent())throw Error('SYNC_OWNER_CHANGED');
-  const auth=await authorize();if(!stillCurrent()||auth.owner!==expectedOwner||!auth.bearer)throw Error('SYNC_AUTH_REQUIRED');
+  if(!navigator.onLine)throw Error('SYNC_OFFLINE');
+  const auth=await authorize();if(!stillCurrent()||auth.owner!==expectedOwner||!['fixture-a','fixture-b'].includes(auth.bearer)||auth.bearer!==(expectedOwner==='11111111-1111-4111-8111-111111111111'?'fixture-a':expectedOwner==='22222222-2222-4222-8222-222222222222'?'fixture-b':''))throw Error('SYNC_AUTH_REQUIRED');
   const response=await fetch(new URL(path,url),{method:'POST',headers:{'content-type':'application/json',authorization:'Bearer '+auth.bearer},body:JSON.stringify(data),credentials:'omit',redirect:'error',cache:'no-store',signal:AbortSignal.timeout(10000)});
   if(!stillCurrent())throw Error('SYNC_OWNER_CHANGED');
   if(!response.ok)throw Error('SYNC_HTTP_'+response.status);
@@ -28,7 +30,7 @@ export function createTransport(endpoint:string,authorize:()=>Promise<Credential
   },
   async pull(deviceId,cursor){
    const result=await post('/v1/sync/pull',{protocol_version:1,device_id:deviceId,app_id:APP_ID,cursor,limit:100});
-   if(result.reset_required)throw Error('SYNC_BOOTSTRAP_REQUIRED');
+   if(result.reset_required===true)return {cursor:cursor??'',hasMore:false,resetRequired:true};
    if(!Array.isArray(result.changes)||typeof result.next_cursor!=='string'||typeof result.has_more!=='boolean')throw Error('SYNC_INVALID_PULL');
    let remote:Remote|undefined;
    for(const c of result.changes){
@@ -36,6 +38,14 @@ export function createTransport(endpoint:string,authorize:()=>Promise<Credential
     remote={revision:c.revision,document:c.operation==='delete'?null:validateDocument(c.data)};
    }
    return {remote,cursor:result.next_cursor,hasMore:result.has_more};
+  },
+  async bootstrap(deviceId){
+   const result=await post('/v1/sync/bootstrap',{protocol_version:1,device_id:deviceId,app_id:APP_ID});
+   if(result.done!==true||result.page_token!==null||typeof result.snapshot_id!=='string'||typeof result.snapshot_cursor!=='string'||!Array.isArray(result.items)||result.items.length>1)throw Error('SYNC_INVALID_BOOTSTRAP');
+   const c=result.items[0];
+   if(!c)return {remote:{revision:0,document:null},cursor:result.snapshot_cursor};
+   if(c.app_id!==APP_ID||c.primitive!=='document'||c.resource_type!==RESOURCE||c.resource_id!==RESOURCE_ID||c.schema_version!==1||!Number.isSafeInteger(c.revision)||c.revision<1||!['upsert','delete'].includes(c.operation))throw Error('SYNC_INVALID_BOOTSTRAP');
+   return {remote:{revision:c.revision,document:c.operation==='delete'?null:validateDocument(c.data)},cursor:result.snapshot_cursor};
   }
  };
 }

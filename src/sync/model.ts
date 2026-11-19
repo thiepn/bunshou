@@ -1,5 +1,6 @@
+import {scheduleSentenceReview} from '../utils/srs';
 import type {PersistedAppState, ReviewGrade} from '../types/curriculum';
-import {validateAndParseBackupJson,createInitialAppState} from '../utils/storage';
+import {validateAndParseBackupJson,createInitialAppState,DEFAULT_SETTINGS} from '../utils/storage';
 import {SENTENCES_BY_ID} from '../data/sentences';
 
 export const APP_ID='bunshou' as const;
@@ -24,6 +25,12 @@ export function canonical(v:unknown):string{
 }
 export const same=(a:unknown,b:unknown)=>canonical(a)===canonical(b);
 export const sameRaw=(a:string,b:string)=>same(state(a),state(b));
+// Keep playback hardware, presentation and accessibility preferences on each device.
+// Wire v1 remains a valid v1 backup with canonical defaults in these fields.
+export const DEVICE_ONLY=['preferredVoiceURI','theme','seasonalTheme','audioSpeed','autoPlayAudio','soundEffectsEnabled','furiganaMode','autoExpandBreakdown'] as const;
+export function project(raw:string){const s=state(raw);s.settings={...s.settings,...Object.fromEntries(DEVICE_ONLY.map(k=>[k,DEFAULT_SETTINGS[k]]))};return JSON.stringify(s);}
+export function withDevice(raw:string,local:string){const s=state(raw),l=state(local);s.settings={...s.settings,...Object.fromEntries(DEVICE_ONLY.map(k=>[k,l.settings[k]]))};return JSON.stringify(s);}
+export function syncRelevant(before:string,after:string){return !sameRaw(project(before),project(after));}
 export const uuid=()=>crypto.randomUUID();
 export function initialMeta(deviceId=uuid()):SyncMeta{return {deviceId,remote:{revision:0,document:null},cursor:null,pending:[]};}
 export function change(action:Action={kind:'edit'},id=uuid()):LocalChange{
@@ -56,7 +63,7 @@ export function buildMutation(raw:string,m:SyncMeta):Mutation{
  const previous=m.remote.document;
  const replacement=m.pending.some(x=>x.action.kind==='replace');
  if(m.remote.revision>0&&!previous&&!replacement)throw Error('SYNC_EXPLICIT_RESTORE_REQUIRED');
- const data=validateDocument({raw,generation:(previous?.generation??0)+Number(replacement),reviews:unionReviews(previous?.reviews??[],m.pending.flatMap(x=>x.event?[x.event]:[]))});
+ const data=validateDocument({raw:project(raw),generation:(previous?.generation??0)+Number(replacement),reviews:unionReviews(previous?.reviews??[],m.pending.flatMap(x=>x.event?[x.event]:[]))});
  return {mutation_id:uuid(),primitive:'document',resource_type:RESOURCE,resource_id:RESOURCE_ID,operation:'upsert',base_revision:m.remote.revision,schema_version:1,data};
 }
 /** Conservative structural three-way merge; counters and SRS records are atomic per item.
@@ -86,10 +93,41 @@ export function reconcile(localRaw:string,m:SyncMeta,remote:Remote):{raw:string;
  if(remote.document)validateDocument(remote.document);
  const dirty=m.pending.length>0;
  if(remote.document&&m.remote.document){const next=new Map(remote.document.reviews.map(e=>[e.event_id,e]));for(const e of m.remote.document.reviews)if(!same(next.get(e.event_id),e))throw Error('SYNC_REVIEW_HISTORY_REMOVED');}
- if(!dirty)return {raw:remoteRaw(remote),meta:{...m,remote,conflict:undefined}};
+ if(!dirty)return {raw:withDevice(remoteRaw(remote),localRaw),meta:{...m,remote,conflict:undefined}};
  const barrier=m.pending.some(x=>x.action.kind==='replace'||x.action.kind==='undo')||!!m.conflict;
  const deleted=remote.document===null||((m.remote.document?.generation??0)!==remote.document.generation);
- const merged=!barrier&&!deleted?mergeRaw(remoteRaw(m.remote),localRaw,remoteRaw(remote)):null;
+ const merged=!barrier&&!deleted?mergeWithReviews(remoteRaw(m.remote),project(localRaw),project(remoteRaw(remote)),m,remote):null;
  if(merged===null)return {raw:localRaw,meta:{...m,conflict:{reason:deleted?'REMOTE_REPLACEMENT_OR_DELETION':barrier?'LOCAL_REPLACEMENT_OR_UNDO':'OVERLAPPING_PROGRESS',localRaw,remote,pending:m.pending}}};
- return {raw:merged,meta:{...m,remote,conflict:undefined}};
+ return {raw:withDevice(merged,localRaw),meta:{...m,remote,conflict:undefined}};
+}
+
+/** Reconcile concurrent reviews only when the exact observed record and daily-log
+ * deltas are reproduced from the shared baseline. A single event per sentence
+ * per side avoids inventing an ordering for bounded legacy review histories.
+ * Same-sentence concurrent reviews stay conflicts (neither event is discarded).
+ */
+export function applyReview(s:PersistedAppState,e:ReviewEvent){
+ const {sentenceId,grade,date,isNew}=e.data;
+ s.records[sentenceId]=scheduleSentenceReview(s.records[sentenceId],sentenceId,grade,date);
+ const log=s.dailyLogs[date]??{date,newStudiedCount:0,reviewsCompletedCount:0,practiceCount:0,grades:{again:0,hard:0,good:0,easy:0}};
+ s.dailyLogs[date]={...log,newStudiedCount:log.newStudiedCount+Number(isNew),reviewsCompletedCount:log.reviewsCompletedCount+Number(!isNew),grades:{...log.grades,[grade]:log.grades[grade]+1}};
+}
+function mergeWithReviews(base:string,local:string,remote:string,m:SyncMeta,r:Remote):string|null{
+ const simple=mergeRaw(base,local,remote);
+ if(simple!==null)return simple;
+ const prior=new Set(m.remote.document?.reviews.map(e=>e.event_id)??[]);
+ const le=m.pending.flatMap(c=>c.event?[c.event]:[]);
+ const re=r.document?.reviews.filter(e=>!prior.has(e.event_id))??[];
+ if(!le.length||!re.length||new Set([...le,...re].map(e=>e.data.sentenceId)).size!==le.length+re.length||new Set([...le,...re].map(e=>e.event_id)).size!==le.length+re.length)return null;
+ try{
+  const b=state(base),l=state(local),rstate=state(remote);
+  const replay=(events:ReviewEvent[])=>{const v=state(base);for(const e of events)applyReview(v,e);return v;};
+  const expectedL=replay(le),expectedR=replay(re);
+  if(!same(l.records,expectedL.records)||!same(l.dailyLogs,expectedL.dailyLogs)||!same(rstate.records,expectedR.records)||!same(rstate.dailyLogs,expectedR.dailyLogs))return null;
+  // Remove proven review effects before merging everything else.
+  l.records=b.records;l.dailyLogs=b.dailyLogs;rstate.records=b.records;rstate.dailyLogs=b.dailyLogs;
+  const merged=mergeRaw(base,JSON.stringify(l),JSON.stringify(rstate));if(!merged)return null;
+  const result=state(merged);for(const e of [...re,...le])applyReview(result,e);
+  const raw=JSON.stringify(result);state(raw);return raw;
+ }catch{return null;}
 }

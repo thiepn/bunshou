@@ -2,7 +2,7 @@ import http from 'node:http';
 import {randomUUID} from 'node:crypto';
 const owners=new Map([['fixture-a','11111111-1111-4111-8111-111111111111'],['fixture-b','22222222-2222-4222-8222-222222222222']]);
 const workspaces=new Map(), seen=new Map(), devices=new Map();
-let loseNext=false;
+let loseNext=false;const expired=new Set();
 const canonical=v=>v===null||typeof v!=='object'?JSON.stringify(v):Array.isArray(v)?'['+v.map(canonical).join(',')+']':'{'+Object.keys(v).sort().map(k=>JSON.stringify(k)+':'+canonical(v[k])).join(',')+'}';
 export async function startFixture(){
  const server=http.createServer(async(req,res)=>{
@@ -16,8 +16,10 @@ export async function startFixture(){
    if(devices.has(p.device_id)&&devices.get(p.device_id)!==owner)return reply(403,{error:'resource_forbidden'});
    devices.set(p.device_id,owner);
    const data=workspaces.get(owner)??{revision:0,document:null,changes:[]};workspaces.set(owner,data);
+   if(req.url==='/v1/sync/bootstrap'){return reply(200,{protocol_version:1,snapshot_id:randomUUID(),snapshot_cursor:data.changes.at(-1)?.cursor??'empty',items:data.changes.length?[data.changes.at(-1)]:[],page_token:null,done:true});}
    if(req.url==='/v1/sync/pull'){
-    const idx=p.cursor===null?-1:data.changes.findIndex(x=>x.cursor===p.cursor);
+    const idx=p.cursor===null||p.cursor==='empty'?-1:data.changes.findIndex(x=>x.cursor===p.cursor);
+    if(expired.delete(owner))return reply(200,{protocol_version:1,changes:[],next_cursor:p.cursor??'empty',has_more:false,reset_required:true});
     if(p.cursor!==null&&p.cursor!=='empty'&&idx<0)return reply(200,{protocol_version:1,changes:[],next_cursor:p.cursor,has_more:false,reset_required:true});
     const records=data.changes.slice(idx+1,idx+1+100);return reply(200,{protocol_version:1,changes:records,next_cursor:records.at(-1)?.cursor??p.cursor??'empty',has_more:data.changes.length>idx+1+records.length,reset_required:false});
    }
@@ -32,10 +34,10 @@ export async function startFixture(){
    data.revision++;data.document=m.data;const cursor=randomUUID();
    data.changes.push({cursor,app_id:'bunshou',primitive:'document',resource_type:'learner_state',resource_id:'progress-v1',operation:'upsert',schema_version:1,revision:data.revision,server_changed_at:new Date().toISOString(),data:m.data});
    const ack={...status,status:'applied',revision:data.revision,change_cursor:cursor};seen.set(id,{digest:canonical(m),ack});
-   if(loseNext){loseNext=false;res.destroy();return;}
+   if(loseNext){loseNext=false;return reply(503,{error:'temporarily_unavailable'});}
    return reply(200,{protocol_version:1,results:[ack]});
   }catch{return reply(400,{error:'validation_failed'});}
  });
  await new Promise(resolve=>server.listen(4174,'127.0.0.1',resolve));
- return {server,workspaces,dropAck:()=>{loseNext=true;}};
+ return {server,workspaces,dropAck:()=>{loseNext=true;},expire:owner=>expired.add(owner)};
 }
