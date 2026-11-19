@@ -58,7 +58,7 @@ export function GuidedLessonView({state,initialUnit,progression,command,onStudy}
     {session&&!session.logged?<button className={primary} disabled={busy} onClick={()=>setShowIntro(false)}>Resume saved session</button>:<button className={primary} disabled={busy} onClick={start}>Start guided exercises</button>}
   </div>}
   {stage==='work'&&task&&<div className={panel}>
-   <div className="flex flex-wrap justify-between gap-2 text-sm"><span>{labels[task.kind]} · {index+1}/{tasks.length}</span><span>{result.answered}/{result.total} answered</span></div>
+   <div className="flex flex-wrap justify-between gap-2 text-sm"><span>{labels[task.kind]} · {session!.index+1}/{tasks.length}</span><span>{result.answered}/{result.total} answered</span></div>
    <TaskView key={session!.id+':'+task.id} task={task} dialogue={dialogue} settings={state.settings} onNext={nextTask} busy={busy}/>
    <button className={button} disabled={busy} onClick={()=>setShowIntro(true)}>Read explanation / pause</button>
   </div>}

@@ -24,7 +24,7 @@ export function validProgression(value:unknown):value is Progression{
  }
  return true;
 }
-export function startSession(p:Progression,unitId:string,state:PersistedAppState,day:string,id=crypto.randomUUID()):Progression{
+export function startSession(p:Progression,unitId:string,state:PersistedAppState,day:string,id:string=crypto.randomUUID()):Progression{
  const old=p.units[unitId],last=old?.last;
  if(last&&!last.logged)throw Error('GUIDED_RESUME_REQUIRED');
  const weak=last?.ids.filter((id,i)=>last.results[id+(i<2?':listen':':produce')]!=='correct')??[];
