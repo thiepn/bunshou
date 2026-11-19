@@ -9,3 +9,5 @@ coverage/
 !.env.example
 .aistudio/
 .antigravity/
+
+/tests/.m1-browser-deps/

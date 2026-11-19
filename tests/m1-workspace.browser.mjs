@@ -1,4 +1,4 @@
-import {chromium,firefox,webkit} from 'playwright';
+import {chromium,firefox,webkit} from './.m1-browser-deps/node_modules/playwright/index.mjs';
 import assert from 'node:assert/strict';
 const url='http://127.0.0.1:4173/bunshou/';
 for(const engine of [chromium,firefox,webkit]){
