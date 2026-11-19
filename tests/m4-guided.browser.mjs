@@ -104,15 +104,14 @@ for(const engine of [chromium,firefox,webkit]){
     const {decode}=await import('/bunshou/src/storage/workspace.ts');
     const state=decode(row.raw);state.settings.dailyNewTarget=20;
     const edited=await store.commit(a,row.revision,state);
-    assert.deepEqual(edited.guided,row.guided);
+    const preserved=JSON.stringify(edited.guided)===JSON.stringify(row.guided);
     const guest=await other.read('guest');
     const claimed=await store.claimGuest(b,guest.revision,0,()=>true);
-    assert.deepEqual(claimed.guided,guest.guided);
-    assert.equal((await other.read('guest')).guided,undefined);
-    return {stale,cancelled,a:edited.guided.units['a11-u02'].last.id,b:claimed.guided.units['a11-u01'].sessions,guest:guest.guided.units['a11-u01'].sessions};
+    const moved=JSON.stringify(claimed.guided)===JSON.stringify(guest.guided)&&(await other.read('guest')).guided===undefined;
+    return {stale,cancelled,preserved,moved,a:edited.guided.units['a11-u02'].last.id,b:claimed.guided.units['a11-u01'].sessions,guest:guest.guided.units['a11-u01'].sessions};
    }finally{store.close();other.close();}
   });
-  assert.ok(evidence.stale&&evidence.cancelled&&evidence.a);assert.equal(evidence.b,1);assert.equal(evidence.guest,1);
+  assert.ok(evidence.stale&&evidence.cancelled&&evidence.preserved&&evidence.moved&&evidence.a);assert.equal(evidence.b,1);assert.equal(evidence.guest,1);
   assert.deepEqual(errors,[]);
   await context.close();
   console.log(engine.name()+': M4 guided grammar, context, audio gate/fallback, typed production, targeted retest, one durable practice log, reload/resume, owner isolation, stale revision rejection and unchanged SRS PASS');
