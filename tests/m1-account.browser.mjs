@@ -87,9 +87,29 @@ for(const engine of [chromium,firefox,webkit]){
   await saved(page);
   const offlineSaved=await row(page,A);assert.equal(JSON.parse(offlineSaved.raw).settings.dailyNewTarget,20);assert.ok(offlineSaved.revision>a.revision);assert.deepEqual(JSON.parse(offlineSaved.raw).favorites,['a11-u01-01']);a=offlineSaved;
   console.log(engine.name()+': offline settings commit and IndexedDB revision PASS');
-  // Cold document with cached app assets simulated by route fulfillment: no fresh Account verification or in-memory lease.
-  const cold=await context.newPage();await cold.goto(base);await cold.getByRole('button',{name:'Continue as guest'}).waitFor({timeout:15000});assert.equal(await cold.getByText(emails[A],{exact:true}).count(),0);assert.equal(await cold.getByRole('button',{name:'Continue offline locally'}).count(),0);await cold.close();
-  console.log(engine.name()+': cold offline private workspace locked PASS');
+  // Chromium can deliver the locally fulfilled shell while the context is offline.
+  // Firefox blocks navigation before routing (NS_ERROR_OFFLINE). For the cold
+  // document boundary, supply the shell while explicitly denying remote traffic
+  // and advertising offline status; no authentication authority can be acquired.
+  // Actual offline editing above still uses context.setOffline(true) in every engine.
+  const cold=await context.newPage();
+  if(engine.name()!=='chromium'){
+   await context.setOffline(false);
+   await cold.addInitScript(()=>Object.defineProperty(navigator,'onLine',{get:()=>false,configurable:true}));
+   await cold.route('**/*',route=>{
+    const u=new URL(route.request().url());
+    return u.origin===origin?route.fallback():route.abort();
+   });
+  }
+  const coldIssued=issued;
+  await cold.goto(base);
+  assert.equal(await cold.evaluate(()=>navigator.onLine),false);
+  await cold.getByRole('button',{name:'Continue as guest'}).waitFor({timeout:15000});
+  assert.equal(await cold.getByText(emails[A],{exact:true}).count(),0);
+  assert.equal(await cold.getByRole('button',{name:'Continue offline locally'}).count(),0);
+  assert.equal(issued,coldIssued);assert.deepEqual((await row(cold,A)).raw,a.raw);
+  await cold.close();
+  console.log(engine.name()+': cold offline private workspace locked PASS ('+(engine.name()==='chromium'?'offline context with routed shell':'offline app boundary with locally supplied shell and blocked remote requests')+')');
   await context.setOffline(false);await owner(page,A);await page.getByText('Offline local access',{exact:false}).waitFor({state:'hidden'});assert.deepEqual((await row(page,A)).raw,a.raw);
   eligible=true;await page.getByRole('button',{name:'Sign out',exact:true}).click();await guest(page);
   const before=issued;await page.reload();await guest(page);assert.equal(issued,before);assert.equal(await page.evaluate(key=>localStorage.getItem(key),key),null);
