@@ -1,3 +1,4 @@
+import type {SyncReceipt} from './schedule';
 import {scheduleSentenceReview} from '../utils/srs';
 import type {PersistedAppState, ReviewGrade} from '../types/curriculum';
 import {validateAndParseBackupJson,createInitialAppState,DEFAULT_SETTINGS} from '../utils/storage';
@@ -13,7 +14,7 @@ export type Document={raw:string;generation:number;reviews:ReviewEvent[]};
 export type Remote={revision:number;document:Document|null};
 export type Mutation={mutation_id:string;primitive:'document';resource_type:typeof RESOURCE;resource_id:typeof RESOURCE_ID;operation:'upsert';base_revision:number;schema_version:1;data:Document};
 export type Conflict={reason:string;localRaw:string;remote:Remote;pending:LocalChange[]};
-export type SyncMeta={deviceId:string;remote:Remote;cursor:string|null;pending:LocalChange[];flight?:{mutation:Mutation;included:string[]};conflict?:Conflict;archives?:Conflict[]};
+export type SyncMeta={deviceId:string;remote:Remote;cursor:string|null;pending:LocalChange[];flight?:{mutation:Mutation;included:string[]};conflict?:Conflict;archives?:Conflict[];autoSync?:boolean;receipt?:SyncReceipt};
 export const emptyRaw=()=>JSON.stringify(createInitialAppState());
 export function state(raw:string):PersistedAppState{const r=validateAndParseBackupJson(raw);if(!r.valid||!r.state)throw Error('SYNC_INVALID_STATE');return r.state;}
 export function canonical(v:unknown):string{

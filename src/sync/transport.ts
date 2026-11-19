@@ -6,17 +6,17 @@ export interface SyncTransport{
  bootstrap(deviceId:string):Promise<{remote:Remote;cursor:string}>;
 }
 /** Explicitly injected development endpoint. No production endpoint/default. */
-export function createTransport(endpoint:string,authorize:()=>Promise<Credentials>,expectedOwner:string,stillCurrent:()=>boolean):SyncTransport{
+export function createTransport(endpoint:string,authorize:()=>Promise<Credentials>,expectedOwner:string,stillCurrent:()=>boolean,cancel?:AbortSignal):SyncTransport{
  const url=new URL(endpoint);
  if(!['http://127.0.0.1:4174','https://bunshou-m2-fixture.invalid'].includes(url.origin)||url.username||url.password)throw Error('SYNC_DEVELOPMENT_ENDPOINT_ONLY');
  async function post(path:string,data:unknown){
-  if(!stillCurrent())throw Error('SYNC_OWNER_CHANGED');
+  if(cancel?.aborted||!stillCurrent())throw Error('SYNC_OWNER_CHANGED');
   if(!navigator.onLine)throw Error('SYNC_OFFLINE');
-  const auth=await authorize();if(!stillCurrent()||auth.owner!==expectedOwner||!['fixture-a','fixture-b'].includes(auth.bearer)||auth.bearer!==(expectedOwner==='11111111-1111-4111-8111-111111111111'?'fixture-a':expectedOwner==='22222222-2222-4222-8222-222222222222'?'fixture-b':''))throw Error('SYNC_AUTH_REQUIRED');
-  const response=await fetch(new URL(path,url),{method:'POST',headers:{'content-type':'application/json',authorization:'Bearer '+auth.bearer},body:JSON.stringify(data),credentials:'omit',redirect:'error',cache:'no-store',signal:AbortSignal.timeout(10000)});
-  if(!stillCurrent())throw Error('SYNC_OWNER_CHANGED');
+  const auth=await authorize();if(cancel?.aborted||!stillCurrent()||auth.owner!==expectedOwner||!['fixture-a','fixture-b'].includes(auth.bearer)||auth.bearer!==(expectedOwner==='11111111-1111-4111-8111-111111111111'?'fixture-a':expectedOwner==='22222222-2222-4222-8222-222222222222'?'fixture-b':''))throw Error('SYNC_AUTH_REQUIRED');
+  const response=await fetch(new URL(path,url),{method:'POST',headers:{'content-type':'application/json',authorization:'Bearer '+auth.bearer},body:JSON.stringify(data),credentials:'omit',redirect:'error',cache:'no-store',signal:cancel?AbortSignal.any([cancel,AbortSignal.timeout(10000)]):AbortSignal.timeout(10000)});
+  if(cancel?.aborted||!stillCurrent())throw Error('SYNC_OWNER_CHANGED');
   if(!response.ok)throw Error('SYNC_HTTP_'+response.status);
-  const result=await response.json();if(!stillCurrent())throw Error('SYNC_OWNER_CHANGED');
+  const result=await response.json();if(cancel?.aborted||!stillCurrent())throw Error('SYNC_OWNER_CHANGED');
   if(result.protocol_version!==1)throw Error('SYNC_PROTOCOL_VERSION');return result;
  }
  return {
