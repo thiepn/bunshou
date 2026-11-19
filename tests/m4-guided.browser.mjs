@@ -30,6 +30,8 @@ for(const engine of [chromium,firefox,webkit]){
   await page.getByRole('radio').nth(1-tasks[0].correct).check();
   await page.getByRole('button',{name:'Check answer'}).click();
   await page.getByText('Not the expected answer',{exact:true}).waitFor();await next();
+  await page.reload();await page.getByRole('button',{name:'Start guided lesson',exact:true}).click();
+  await page.getByText('Context comprehension · 2/6',{exact:true}).waitFor();
   await page.getByRole('radio').nth(tasks[1].correct).check();
   await page.getByRole('button',{name:'Check answer'}).click();await next();
   // Listening credit requires completed playback; fallback remains assisted.
@@ -65,12 +67,31 @@ for(const engine of [chromium,firefox,webkit]){
   assert.equal(Object.keys(saved.records).length,0);
   assert.equal(Object.values(saved.dailyLogs).reduce((n,v)=>n+v.practiceCount,0),1);
   assert.equal(await page.getByRole('button',{name:'Practice activity recorded'}).isDisabled(),true);
+  await page.reload();await page.getByRole('button',{name:'Start guided lesson',exact:true}).click();
+  await page.getByRole('heading',{name:'Guided practice results'}).waitFor();
+  assert.equal(await page.getByRole('button',{name:'Practice activity recorded'}).isDisabled(),true);
+  await page.getByText('1 recorded sessions · 4/6 first-pass correct answers',{exact:true}).waitFor();
   await page.getByRole('button',{name:'Explore next unit'}).click();
   assert.equal(await page.getByLabel('Choose any unit').inputValue(),'a11-u02');
   await page.getByLabel('Choose any unit').selectOption('a12-u10');
   await page.getByText('Elementary Comparisons (どちら・のほうが・一番)',{exact:true}).waitFor();
+  // Exercise owner and stale-revision fences against real IndexedDB; no real account traffic.
+  const evidence=await page.evaluate(async()=>{
+   const {WorkspaceStore}=await import('/bunshou/src/storage/workspace.ts');
+   const a='11111111-1111-4111-8111-111111111111',b='22222222-2222-4222-8222-222222222222';
+   const store=await WorkspaceStore.open(),other=await WorkspaceStore.open();
+   try{
+    const cmd={kind:'start',unitId:'a11-u02',day:'2026-11-19',id:crypto.randomUUID()};
+    const row=await store.guidedCommand(a,0,cmd,()=>true);
+    let stale=false,cancelled=false;
+    try{await other.guidedCommand(a,0,cmd,()=>true);}catch{stale=true;}
+    try{await other.guidedCommand(b,0,cmd,()=>false);}catch{cancelled=true;}
+    return {stale,cancelled,a:row.guided.units['a11-u02'].last.id,b:(await other.read(b)).guided,guest:(await other.read('guest')).guided.units['a11-u01'].sessions};
+   }finally{store.close();other.close();}
+  });
+  assert.ok(evidence.stale&&evidence.cancelled&&evidence.a);assert.equal(evidence.b,undefined);assert.equal(evidence.guest,1);
   assert.deepEqual(errors,[]);
   await context.close();
-  console.log(engine.name()+': M4 guided grammar, context, audio gate/fallback, typed production, targeted retest, one durable practice log and unchanged SRS PASS');
+  console.log(engine.name()+': M4 guided grammar, context, audio gate/fallback, typed production, targeted retest, one durable practice log, reload/resume, owner isolation, stale revision rejection and unchanged SRS PASS');
  }finally{await browser.close();}
 }

@@ -1,3 +1,4 @@
+import type {Progression,Command} from './learning/progression';
 import {GuidedLessonView} from './components/GuidedLessonView';
 import {EcosystemView} from './components/EcosystemView';
 import {parseFragment} from './interop/contract';
@@ -30,7 +31,7 @@ import { createInitialAppState } from './utils/storage';
 import type { SetStateAction } from 'react';
 import type {Action} from './sync/model';
 
-export default function App({appState,setAppState}: {appState: PersistedAppState; setAppState: (update:SetStateAction<PersistedAppState>, action?:Action)=>void}) {
+export default function App({appState,setAppState,guided,guideCommand}: {guided:Progression;guideCommand:(c:Command)=>Promise<void>;appState: PersistedAppState; setAppState: (update:SetStateAction<PersistedAppState>, action?:Action)=>void}) {
   const [guidedUnit,setGuidedUnit]=useState<string|undefined>(undefined);
   const [undoStack, setUndoStack] = useState<PersistedAppState[]>([]);
 
@@ -340,7 +341,7 @@ export default function App({appState,setAppState}: {appState: PersistedAppState
       />
 
       <main className="flex-1">
-        {activeScreen === 'guided' && <GuidedLessonView key={guidedUnit??'recommended'} state={appState} initialUnit={guidedUnit} onLog={handleLogPracticeCard} onStudy={handleStartStudy}/>}
+        {activeScreen === 'guided' && <GuidedLessonView key={guidedUnit??'recommended'} state={appState} initialUnit={guidedUnit} progression={guided} command={guideCommand} onStudy={handleStartStudy}/>}
         {activeScreen === 'ecosystem' && <EcosystemView key={JSON.stringify(incoming)} initial={incoming} onPractice={handleStartStudy} onGrammar={handleOpenUnitGrammar}/>}
         {activeScreen === 'home' && (
           <HomeView
