@@ -1,7 +1,7 @@
 name: Bunshou M1 quality (no deployment)
 on:
   pull_request:
-    branches: [main, feat/bunshou-m1-account-local-workspaces, feat/bunshou-m2-sync]
+    branches: [main, feat/bunshou-m1-account-local-workspaces, feat/bunshou-m2-sync, feat/bunshou-m3-interoperability]
   workflow_dispatch:
 permissions:
   contents: read
@@ -19,7 +19,7 @@ jobs:
           cache: npm
       - run: npm ci
       - run: node scripts/verify-m1-preservation.mjs
-      - run: npm exec -- tsx --test src/data/sentences.test.ts src/storage/workspace.test.ts src/sync/model.test.ts src/sync/schedule.test.ts src/interop/contract.test.ts
+      - run: npm exec -- tsx --test src/data/sentences.test.ts src/storage/workspace.test.ts src/sync/model.test.ts src/sync/schedule.test.ts src/interop/contract.test.ts src/learning/guided.test.ts
       - run: npm run lint
       - run: npm run build
       - run: npm install --prefix tests/.m1-browser-deps --no-save --package-lock=false playwright@1.56.1
@@ -33,6 +33,7 @@ jobs:
           node tests/m1-workspace.browser.mjs
           node tests/m2-sync.browser.mjs
           node tests/m3-interop.browser.mjs
+          node tests/m4-guided.browser.mjs
       - name: Build disposable Account fixture (not deployed)
         env:
           VITE_BUNSHOU_M2_FIXTURE: 'true'

@@ -9,7 +9,8 @@ export type AppScreen =
   | 'library'
   | 'progress'
   | 'settings'
-  | 'ecosystem';
+  | 'ecosystem'
+  | 'guided';
 
 interface TopNavProps {
   activeScreen: AppScreen;
@@ -19,6 +20,7 @@ interface TopNavProps {
 
 const NAV_ITEMS: Array<{ id: AppScreen; label: string }> = [
   { id: 'home', label: 'Home' },
+  { id: 'guided', label: 'Guided' },
   { id: 'curriculum', label: 'Curriculum' },
   { id: 'grammar', label: 'Grammar' },
   { id: 'library', label: 'Library' },
@@ -43,7 +45,7 @@ export const TopNav: React.FC<TopNavProps> = ({ activeScreen, onNavigate, dueCou
         {/* Zone 2: Concise single-line text navigation links */}
         <nav
           aria-label="Main navigation"
-          className="hidden md:flex items-center gap-3 text-sm font-medium"
+          className="hidden md:flex min-w-0 overflow-x-auto items-center gap-3 text-sm font-medium"
         >
           {NAV_ITEMS.map((item) => {
             const isActive = activeScreen === item.id;
@@ -85,10 +87,10 @@ export const TopNav: React.FC<TopNavProps> = ({ activeScreen, onNavigate, dueCou
       {/* Mobile Bottom Navigation Bar (stays well below 15% viewport height cap) */}
       <nav
         aria-label="Mobile navigation"
-        className="md:hidden fixed bottom-0 inset-x-0 z-30 bg-[#F7F3EB]/95 dark:bg-[#0D1118]/95 backdrop-blur-sm border-t border-[#DFD6C7] dark:border-slate-800 px-2 py-1.5 flex items-center justify-around"
+        className="md:hidden fixed bottom-0 inset-x-0 z-30 bg-[#F7F3EB]/95 dark:bg-[#0D1118]/95 backdrop-blur-sm border-t border-[#DFD6C7] dark:border-slate-800 px-2 py-1.5 flex items-center overflow-x-auto"
       >
         {(
-          ['home', 'study', 'curriculum', 'grammar', 'library', 'progress', 'settings'] as AppScreen[]
+          ['home', 'study', 'guided', 'curriculum', 'grammar', 'library', 'ecosystem', 'progress', 'settings'] as AppScreen[]
         ).map((screenId) => {
           const isActive = activeScreen === screenId;
           const label =
@@ -96,6 +98,10 @@ export const TopNav: React.FC<TopNavProps> = ({ activeScreen, onNavigate, dueCou
               ? 'Home'
               : screenId === 'study'
               ? 'Study'
+              : screenId === 'guided'
+              ? 'Guided'
+              : screenId === 'ecosystem'
+              ? 'Context'
               : screenId === 'curriculum'
               ? 'Units'
               : screenId === 'grammar'

@@ -48,6 +48,7 @@ import { StudyLaunchConfig } from './StudyView';
 interface HomeViewProps {
   appState: PersistedAppState;
   onStartStudy: (config: StudyLaunchConfig) => void;
+  onGuidedLesson: (unitId?:string)=>void;
   onSelectLevel: (level: LevelId) => void;
   onSelectSeasonalTheme?: (season: SeasonalTheme) => void;
   onNavigateToCurriculum: (subTab?: CurriculumSubTab, dialogueUnitId?: string) => void;
@@ -61,6 +62,7 @@ const KYOTO_HERO_IMAGE = '/bunshou/src/assets/images/kyoto_study_pavilion_hero_1
 export const HomeView: React.FC<HomeViewProps> = ({
   appState,
   onStartStudy,
+  onGuidedLesson,
   onSelectLevel,
   onSelectSeasonalTheme,
   onNavigateToCurriculum,
@@ -210,6 +212,10 @@ export const HomeView: React.FC<HomeViewProps> = ({
 
   return (
     <div className="max-w-6xl mx-auto px-4 sm:px-6 py-7 md:py-10 pb-24 md:pb-16 space-y-8">
+      <section className="rounded-xl border border-[#DFD6C7] dark:border-slate-700 bg-[#FCFBF7] dark:bg-[#141923] p-4 flex flex-wrap items-center justify-between gap-3">
+        <div><h2 className="font-bold">Learn a unit step by step</h2><p className="text-sm">Grammar, context, listening and active Japanese production.</p></div>
+        <button type="button" className="rounded-lg bg-[#C83E2B] text-white px-4 py-2 font-semibold" onClick={()=>onGuidedLesson(recommendedUnit.id)}>Start guided lesson</button>
+      </section>
       {/* SECTION 1: KYOTO STUDY PAVILION HERO & SHOJI TELEMETRY WINDOW */}
       <section
         aria-label="Daily study overview and telemetry"

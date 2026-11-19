@@ -26,6 +26,7 @@ interface GrammarHandbookViewProps {
   appState: PersistedAppState;
   initialUnitId?: string;
   onStartStudy: (config: StudyLaunchConfig) => void;
+  onGuidedLesson:(unitId:string)=>void;
   onInspectUnitInLibrary: (unitId: string, level: LevelId) => void;
   onOpenUnitStory?: (unitId: string) => void;
 }
@@ -46,6 +47,7 @@ export const GrammarHandbookView: React.FC<GrammarHandbookViewProps> = ({
   appState,
   initialUnitId,
   onStartStudy,
+  onGuidedLesson,
   onInspectUnitInLibrary,
   onOpenUnitStory,
 }) => {
@@ -371,6 +373,7 @@ export const GrammarHandbookView: React.FC<GrammarHandbookViewProps> = ({
               {/* Right Detail Pane: Active Unit Grammar Lesson & Corpus Sentences */}
               <div className="lg:col-span-8 space-y-5">
                 <article className="bg-[#FCFBF7] dark:bg-[#141923] border border-[#DFD6C7] dark:border-slate-800 rounded-2xl p-6 sm:p-8">
+                  <button type="button" className="rounded-lg bg-[#C83E2B] text-white px-4 py-2 mb-4 font-semibold" onClick={()=>onGuidedLesson(activeLesson.unitId)}>Start guided practice for this unit</button>
                   {/* Top Metadata & 3-Step Unit Actions */}
                   <div className="flex flex-col sm:flex-row sm:items-start justify-between gap-4 pb-5 border-b border-[#E6DEC8] dark:border-slate-800">
                     <div>
