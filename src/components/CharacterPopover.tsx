@@ -1,3 +1,4 @@
+import {partnerLinksAvailable} from '../interop/availability';
 import {lexical,link} from '../interop/contract';
 import React, { useEffect, useId, useRef, useState } from 'react';
 import { BookOpen, Brush, Volume2, X } from 'lucide-react';
@@ -150,7 +151,7 @@ export const CharacterPopover: React.FC<CharacterPopoverProps> = ({
           </div>
         </div>
 
-        <div className="mt-3 flex flex-wrap gap-3 text-xs">{lookup&&<a className="underline" href={link('kotoba',lookup)} rel="noreferrer">Look up in Kotoba (planned route)</a>}{kanjiLinks.map((r,i)=><a key={i} className="underline" href={link('kotoba',r)} rel="noreferrer">Kanji {'text' in r?r.text:''} in Kotoba</a>)}</div>
+        {partnerLinksAvailable&&<div className="mt-3 flex flex-wrap gap-3 text-xs">{lookup&&<a className="underline" href={link('kotoba',lookup)} rel="noreferrer">Look up in Kotoba (planned route)</a>}{kanjiLinks.map((r,i)=><a key={i} className="underline" href={link('kotoba',r)} rel="noreferrer">Kanji {'text' in r?r.text:''} in Kotoba</a>)}</div>}
         {/* Shodō Brush Practice Drawer */}
         {showBrushStudio && (
           <div className="mt-4">

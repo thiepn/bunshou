@@ -6,6 +6,8 @@ for(const engine of [chromium,firefox,webkit]){
  const browser=await engine.launch();
  try{
   const context=await browser.newContext({acceptDownloads:true});
+  await context.route('https://fonts.googleapis.com/**',route=>route.fulfill({status:200,contentType:'text/css',body:''}));
+  await context.route('https://fonts.gstatic.com/**',route=>route.abort());
   await context.addInitScript(()=>{
    // Deterministic disposable audio interface; never pretend sound fidelity was tested.
    window.__m4AudioMode='success';
@@ -16,7 +18,7 @@ for(const engine of [chromium,firefox,webkit]){
   const page=await context.newPage();
   page.on('dialog',d=>d.accept());
   const errors=[];page.on('pageerror',e=>errors.push(e.message));
-  await page.goto(base);
+  await page.goto(base,{waitUntil:'domcontentloaded'});
   await page.getByRole('button',{name:'Start guided lesson',exact:true}).click();
   await page.getByRole('heading',{name:'Guided lessons'}).waitFor();
   await page.getByLabel('Choose any unit').selectOption('a11-u01');
@@ -25,11 +27,19 @@ for(const engine of [chromium,firefox,webkit]){
    const {createInitialAppState}=await import('/bunshou/src/utils/storage.ts');
    return makeLesson(createInitialAppState(),'a11-u01','2026-11-19');
   });
+  const step=page.locator('section[aria-label="Guided learning"] span').filter({hasText:/ · [1-6]\/6$/});
   const next=async()=>{
-   await page.getByRole('button',{name:'Continue exercise'}).click();
+   const before=await step.innerText();
+   const button=page.getByRole('button',{name:'Continue exercise'});
+   await button.click();
+   // A saved-state label can still describe the previous render just after click.
+   // Require both the old feedback to go away and the new persisted step/summary.
+   await button.waitFor({state:'detached'});
+   await page.waitForFunction(old=>Array.from(document.querySelectorAll('section[aria-label="Guided learning"] span')).some(s=>/ · [1-6]\/6$/.test(s.textContent??'')&&s.textContent!==old)||Array.from(document.querySelectorAll('h2')).some(h=>h.textContent==='Guided practice results'),before);
    await page.getByText('Saved on this device',{exact:false}).waitFor();
   };
   await page.getByRole('button',{name:'Start guided exercises'}).click();
+  await page.getByText('Grammar check · 1/6',{exact:true}).waitFor();
   await page.getByRole('radio').nth(1-tasks[0].correct).check();
   await page.getByRole('button',{name:'Check answer'}).click();
   await page.getByText('Not the expected answer',{exact:true}).waitFor();await next();
@@ -40,14 +50,17 @@ for(const engine of [chromium,firefox,webkit]){
    const store=await WorkspaceStore.open();try{return (await store.read('guest')).guided.units['a11-u01'].last;}finally{store.close();}
   });
   assert.equal(checkpoint.index,1);assert.equal(checkpoint.first['a11-u01:grammar'],'missed');
-  await page.reload();await page.getByRole('button',{name:'Start guided lesson',exact:true}).click();
+  await page.reload({waitUntil:'domcontentloaded'});await page.getByRole('button',{name:'Start guided lesson',exact:true}).click();
   await page.getByText('Context comprehension · 2/6',{exact:true}).waitFor();
   await page.getByRole('radio').nth(tasks[1].correct).check();
   await page.getByRole('button',{name:'Check answer'}).click();await next();
   // Listening credit requires completed playback; fallback remains assisted.
+  await page.getByText('Listening comprehension · 3/6',{exact:true}).waitFor();
   await page.getByRole('radio').nth(tasks[2].correct).check();
   assert.equal(await page.getByRole('button',{name:'Check answer'}).isDisabled(),true);
   await page.getByRole('button',{name:'Play Japanese audio'}).click();
+  await page.waitForFunction(()=>!Array.from(document.querySelectorAll('button')).find(b=>b.textContent==='Check answer')?.disabled);
+  assert.equal(await page.getByRole('radio').nth(tasks[2].correct).isChecked(),true);
   await page.getByRole('button',{name:'Check answer'}).click();await next();
   await page.evaluate(()=>{window.__m4AudioMode='unavailable';});
   await page.getByRole('button',{name:'Play Japanese audio'}).click();
@@ -63,7 +76,9 @@ for(const engine of [chromium,firefox,webkit]){
   await page.getByRole('heading',{name:'Guided practice results'}).waitFor();
   await page.getByText('Current result: 4/6 correct · 1 assisted · 1 missed.',{exact:true}).waitFor();
   await page.getByRole('button',{name:'Retry missed or assisted tasks'}).click();
+  await page.getByText('Grammar check · 1/6',{exact:true}).waitFor();
   await page.getByRole('radio').nth(tasks[0].correct).check();await page.getByRole('button',{name:'Check answer'}).click();await next();
+  await page.getByText('Listening comprehension · 4/6',{exact:true}).waitFor();
   await page.evaluate(()=>{window.__m4AudioMode='success';});
   await page.getByRole('button',{name:'Play Japanese audio'}).click();
   await page.getByRole('radio').nth(tasks[3].correct).check();
@@ -78,7 +93,7 @@ for(const engine of [chromium,firefox,webkit]){
   assert.equal(Object.keys(saved.records).length,0);
   assert.equal(Object.values(saved.dailyLogs).reduce((n,v)=>n+v.practiceCount,0),1);
   assert.equal(await page.getByRole('button',{name:'Practice activity recorded'}).isDisabled(),true);
-  await page.reload();await page.getByRole('button',{name:'Start guided lesson',exact:true}).click();
+  await page.reload({waitUntil:'domcontentloaded'});await page.getByRole('button',{name:'Start guided lesson',exact:true}).click();
   await page.getByRole('heading',{name:'Guided practice results'}).waitFor();
   assert.equal(await page.getByRole('button',{name:'Practice activity recorded'}).isDisabled(),true);
   await page.getByText('1 recorded sessions · 4/6 first-pass correct answers',{exact:true}).waitFor();

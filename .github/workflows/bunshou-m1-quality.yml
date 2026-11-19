@@ -22,10 +22,11 @@ jobs:
       - run: npm exec -- tsx --test src/data/sentences.test.ts src/storage/workspace.test.ts src/sync/model.test.ts src/sync/schedule.test.ts src/interop/contract.test.ts src/learning/guided.test.ts src/learning/progression.test.ts
       - run: npm run lint
       - run: npm run build
+      - run: node scripts/package-release.mjs
       - run: npm install --prefix tests/.m1-browser-deps --no-save --package-lock=false playwright@1.56.1
       - run: tests/.m1-browser-deps/node_modules/.bin/playwright install --with-deps chromium firefox webkit
       - run: |
-          npm exec -- vite --host=127.0.0.1 --port=4173 --strictPort > /tmp/bunshou-vite.log 2>&1 &
+          VITE_BUNSHOU_PARTNER_FIXTURE=true npm exec -- vite --host=127.0.0.1 --port=4173 --strictPort > /tmp/bunshou-vite.log 2>&1 &
           for i in $(seq 1 40); do
             if curl --fail --silent http://127.0.0.1:4173/bunshou/ >/dev/null; then break; fi
             sleep 1
