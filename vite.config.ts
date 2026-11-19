@@ -7,6 +7,7 @@ import {VitePWA} from 'vite-plugin-pwa';
 
 export default defineConfig(() => {
   return {
+    base: '/bunshou/',
     plugins: [
       react(),
       tailwindcss(),
@@ -22,13 +23,17 @@ export default defineConfig(() => {
         ],
         manifest: false,
         workbox: {
+          cacheId: 'thiepn-bunshou-v1',
+          navigateFallback: '/bunshou/index.html',
+          navigateFallbackAllowlist: [/^\/bunshou\//],
+          navigateFallbackDenylist: [/^\/bunshou\/auth\/callback\//],
           globPatterns: ['**/*.{js,css,html,ico,png,svg,jpg,woff,woff2,webmanifest}'],
           runtimeCaching: [
             {
               urlPattern: /^https:\/\/fonts\.googleapis\.com\/.*/i,
               handler: 'CacheFirst',
               options: {
-                cacheName: 'google-fonts-cache',
+                cacheName: 'bunshou-google-fonts-cache',
                 expiration: {
                   maxEntries: 10,
                   maxAgeSeconds: 60 * 60 * 24 * 365,
@@ -42,7 +47,7 @@ export default defineConfig(() => {
               urlPattern: /^https:\/\/fonts\.gstatic\.com\/.*/i,
               handler: 'CacheFirst',
               options: {
-                cacheName: 'gstatic-fonts-cache',
+                cacheName: 'bunshou-gstatic-fonts-cache',
                 expiration: {
                   maxEntries: 10,
                   maxAgeSeconds: 60 * 60 * 24 * 365,

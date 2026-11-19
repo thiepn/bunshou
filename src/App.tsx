@@ -22,14 +22,10 @@ import {
   getLocalDateString,
   scheduleSentenceReview,
 } from './utils/srs';
-import {
-  clearPersistedState,
-  loadPersistedState,
-  savePersistedState,
-} from './utils/storage';
+import { createInitialAppState } from './utils/storage';
+import type { Dispatch, SetStateAction } from 'react';
 
-export default function App() {
-  const [appState, setAppState] = useState<PersistedAppState>(() => loadPersistedState());
+export default function App({appState,setAppState}: {appState: PersistedAppState; setAppState: Dispatch<SetStateAction<PersistedAppState>>}) {
   const [undoStack, setUndoStack] = useState<PersistedAppState[]>([]);
 
   const [activeScreen, setActiveScreen] = useState<AppScreen>(() => {
@@ -60,10 +56,6 @@ export default function App() {
     favoritesOnly?: boolean;
   }>({});
 
-  // Persist state changes to localStorage
-  useEffect(() => {
-    savePersistedState(appState);
-  }, [appState]);
 
   // Sync light/dark theme class on <html> and update PWA theme-color meta tag
   useEffect(() => {
@@ -295,7 +287,7 @@ export default function App() {
   }, []);
 
   const handleResetAllProgress = useCallback(() => {
-    const fresh = clearPersistedState();
+    const fresh = createInitialAppState();
     setUndoStack([]);
     setAppState(fresh);
   }, []);

@@ -53,7 +53,7 @@ export class WorkspaceStore {
   /** Legacy bytes are never deleted or rewritten. A receipt makes retry idempotent. */
   async migrateLegacy(storage: Pick<Storage,'getItem'>) {
     const existing = await this.run(['meta'], 'readonly', async tx => request<Receipt | undefined>(tx.objectStore('meta').get('legacy')));
-    if (existing) return;
+    if (existing) { if(storage.getItem(STORAGE_KEY)!==existing.raw) throw new WorkspaceError('LEGACY_CHANGED_AFTER_MIGRATION',storage.getItem(STORAGE_KEY)??undefined); return; }
     let raw: string | null;
     try { raw = storage.getItem(STORAGE_KEY); } catch { throw new WorkspaceError('LEGACY_STORAGE_UNAVAILABLE'); }
     let stateRaw: string | null = null;
@@ -101,7 +101,7 @@ export class WorkspaceStore {
       const store=tx.objectStore('states');
       const guest=await request<Envelope|undefined>(store.get(GUEST));
       const target=await request<Envelope|undefined>(store.get(owner));
-      if(!guest || guest.revision!==guestRevision || (target?.revision??0)!==targetRevision || target || guest.claimedFrom!==undefined || !stillAuthorized()) throw new WorkspaceError('CLAIM_CONFLICT');
+      if(!guest || guest.revision!==guestRevision || (target?.revision??0)!==targetRevision || target || guest.raw===initialRaw() || !stillAuthorized()) throw new WorkspaceError('CLAIM_CONFLICT');
       decode(guest.raw);
       const next: Envelope={owner,revision:1,raw:guest.raw,legacyRaw:guest.legacyRaw,claimedFrom:guestRevision};
       await request(store.add(next));
