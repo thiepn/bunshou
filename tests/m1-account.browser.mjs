@@ -1,5 +1,6 @@
 import {chromium,firefox,webkit} from './.m1-browser-deps/node_modules/playwright/index.mjs';
 import assert from 'node:assert/strict';
+import {startFixture} from './m2-sync-fixture.mjs';
 import {createHash} from 'node:crypto';
 import {readFile} from 'node:fs/promises';
 import {resolve,extname} from 'node:path';
@@ -12,10 +13,12 @@ const mime={'.html':'text/html','.js':'application/javascript','.css':'text/css'
 const root=resolve('dist-m1-fixture');
 for(const engine of [chromium,firefox,webkit]){
  const browser=await engine.launch();
+ const syncFixture=await startFixture();
  try{
   const context=await browser.newContext({serviceWorkers:'block'});
   let loginAs=A, eligible=false, denied=false, issued=0, refreshed=0, probes=0, nonce=0;
   const codes=new Map(),tokens=new Map(),refreshes=new Map(),errors=[],trace=[];
+  let syncRequests=0,holdNext=null;
   const cors={'access-control-allow-origin':origin,'access-control-allow-methods':'GET,POST,OPTIONS','access-control-allow-headers':'authorization,apikey,content-type,accept','cache-control':'no-store'};
   const reply=(route,status,body)=>route.fulfill({status,headers:cors,contentType:'application/json',body:JSON.stringify(body)});
   const issue=owner=>{const n=++issued,access='fixture-access-token-'+n,refresh='fixture-refresh-'+n;tokens.set(access,owner);refreshes.set(refresh,owner);return {access_token:access,refresh_token:refresh,expires_in:3600,token_type:'bearer',scope:'openid email profile offline_access'};};
@@ -32,6 +35,22 @@ for(const engine of [chromium,firefox,webkit]){
      probes++;assert.equal(u.searchParams.get('client_id'),client);
      const data=JSON.stringify({type:'thiepn:sso-probe:v1',clientId:client,signedIn:eligible,eligible});
      return route.fulfill({status:200,contentType:'text/html',body:'<script>parent.postMessage('+data+','+JSON.stringify(origin)+')</script>'});
+    }
+    if(u.origin==='https://bunshou-m2-fixture.invalid'){
+     if(req.method()==='OPTIONS')return route.fulfill({status:204,headers:cors});
+     assert.ok(['Bearer fixture-a','Bearer fixture-b'].includes(req.headers().authorization));
+     syncRequests++;
+     const local=await fetch('http://127.0.0.1:4174'+u.pathname,{method:req.method(),headers:{authorization:req.headers().authorization,'content-type':'application/json'},body:req.postData()});
+     const body=await local.text();
+     if(holdNext){
+      const hold=holdNext;holdNext=null;hold.started();
+      await hold.release;
+      // Cancellation can abort the browser request before this deliberately late response.
+      try{await route.fulfill({status:local.status,headers:cors,contentType:'application/json',body});}catch{}
+      finally{hold.finished();}
+      return;
+     }
+     return route.fulfill({status:local.status,headers:cors,contentType:'application/json',body});
     }
     if(u.origin!==issuer)return route.abort();
     if(req.method()==='OPTIONS')return route.fulfill({status:204,headers:cors});
@@ -128,7 +147,76 @@ for(const engine of [chromium,firefox,webkit]){
   await page.reload();await guest(page);
   await page.evaluate(optout=>localStorage.removeItem(optout),optout);await page.reload();await owner(page,A);
   assert.ok(probes>=2);assert.deepEqual(errors,[]);
+  // Real Account UI integration: explicitly sync the fixture-authenticated workspace.
+  await page.getByRole('button',{name:'Sync now (fixture)'}).click();
+  await page.getByText('Fixture sync complete',{exact:false}).waitFor({timeout:30000});
+  assert.equal(JSON.parse(syncFixture.workspaces.get(A).document.raw).settings.dailyNewTarget,20);
+  assert.deepEqual(JSON.parse(syncFixture.workspaces.get(A).document.raw).favorites,['a11-u01-01']);
+  assert.equal((await row(page,A)).sync.pending.length,0);
+  // Another independent disposable device writes a conflicting setting via the
+  // HTTP contract. The original UI must surface both candidates and resolve.
+  await page.getByRole('button',{name:'Settings',exact:true}).filter({visible:true}).first().click();
+  await page.getByRole('button',{name:'30 / day',exact:true}).click();await saved(page);
+  const remote=syncFixture.workspaces.get(A), candidate=JSON.parse(remote.document.raw);candidate.settings.dailyNewTarget=5;
+  const {randomUUID}=await import('node:crypto');
+  const mutation={mutation_id:randomUUID(),primitive:'document',resource_type:'learner_state',resource_id:'progress-v1',operation:'upsert',base_revision:remote.revision,schema_version:1,data:{...remote.document,raw:JSON.stringify(candidate)}};
+  const pushed=await fetch('http://127.0.0.1:4174/v1/sync/push',{method:'POST',headers:{authorization:'Bearer fixture-a','content-type':'application/json'},body:JSON.stringify({protocol_version:1,app_id:'bunshou',device_id:randomUUID(),mutations:[mutation]})});
+  assert.equal((await pushed.json()).results[0].status,'applied');
+  await page.getByRole('button',{name:'Sync now (fixture)'}).click();
+  await page.getByText('Synchronization conflict',{exact:true}).waitFor({timeout:30000});
+  await page.getByRole('button',{name:'Use other device version'}).click();
+  await page.getByText('Fixture sync complete',{exact:false}).waitFor({timeout:30000});
+  const resolved=await row(page,A);assert.equal(JSON.parse(resolved.raw).settings.dailyNewTarget,5);assert.equal(JSON.parse(resolved.sync.archives.at(-1).localRaw).settings.dailyNewTarget,30);assert.equal(resolved.sync.pending.length,0);
+  await page.getByRole('button',{name:'Export sync recovery archive'}).waitFor();
+  console.log(engine.name()+': M2 Account-authorized fixture sync, conflict UI and durable resolution archive PASS');
+  assert.deepEqual(errors,[]);
+  // Opt in only after the full legacy M1/manual-sync acceptance has passed.
+  await page.getByRole('button',{name:'Enable automatic sync (fixture)'}).click();
+  await page.getByRole('button',{name:'Disable automatic sync (fixture)'}).waitFor({timeout:10000});
+  assert.equal((await row(page,A)).sync.autoSync,true);
+  await context.setOffline(true);
+  await page.getByRole('button',{name:'Continue offline locally'}).click({timeout:15000});
+  await page.getByRole('button',{name:'Settings',exact:true}).filter({visible:true}).first().click();
+  await page.getByRole('button',{name:'20 / day',exact:true}).click();await saved(page);
+  const off=await row(page,A);assert.equal(JSON.parse(off.raw).settings.dailyNewTarget,20);assert.equal(off.sync.pending.length,1);
+  const requestsOffline=syncRequests,revision=syncFixture.workspaces.get(A).revision;
+  await page.waitForTimeout(1700);assert.equal(syncRequests,requestsOffline);
+  syncFixture.dropAck();
+  await context.setOffline(false);await owner(page,A);
+  await page.getByText('Sync retry scheduled',{exact:false}).waitFor({timeout:30000});
+  const retry=await row(page,A);assert.equal(retry.sync.receipt.outcome,'retry');assert.equal(retry.sync.receipt.failures,1);assert.ok(retry.sync.flight);
+  assert.equal(syncFixture.workspaces.get(A).revision,revision+1);
+  const mutationId=retry.sync.flight.mutation.mutation_id;
+  // Reload while retry deadline is durable. The immutable outbox must survive.
+  await page.reload();await owner(page,A);
+  assert.equal((await row(page,A)).sync.autoSync,true);
+  const reloaded=await row(page,A);
+  if(reloaded.sync.flight)assert.equal(reloaded.sync.flight.mutation.mutation_id,mutationId);
+  await page.getByText('Fixture sync complete',{exact:false}).waitFor({timeout:30000});
+  const complete=await row(page,A);assert.equal(complete.sync.pending.length,0);assert.equal(complete.sync.flight,undefined);assert.equal(complete.sync.receipt.failures,0);assert.ok(complete.sync.receipt.lastSuccessAt>=retry.sync.receipt.attemptAt);
+  assert.equal(syncFixture.workspaces.get(A).revision,revision+1);
+  assert.equal(JSON.parse(syncFixture.workspaces.get(A).document.raw).settings.dailyNewTarget,20);
+  await page.getByText('Last verified fixture sync:',{exact:false}).waitFor();
+  console.log(engine.name()+': automatic offline reconnect, durable retry after reload and exact-once remote revision PASS');
+  // Force a real in-flight response to arrive after the owner was signed out.
+  let started,release,finished;
+  const startedPromise=new Promise(r=>{started=r;}),releasePromise=new Promise(r=>{release=r;}),finishedPromise=new Promise(r=>{finished=r;});
+  holdNext={started,release:releasePromise,finished};
+  await page.getByRole('button',{name:'Sync now (fixture)'}).click();
+  try{
+   await Promise.race([startedPromise,new Promise((_,reject)=>setTimeout(()=>reject(Error('sync request was not held')),15000))]);
+   const inFlight=await row(page,A);assert.equal(inFlight.sync.receipt.outcome,'running');
+   const count=syncRequests;
+   await page.getByRole('button',{name:'Sign out',exact:true}).click();await guest(page);
+   release();await finishedPromise;
+   await page.waitForTimeout(1700);
+   assert.equal(syncRequests,count);const after=await row(page,A);
+   assert.equal(after.revision,inFlight.revision);assert.deepEqual(after.sync.receipt,inFlight.sync.receipt);
+   assert.equal(await page.getByRole('button',{name:'Sync now (fixture)'}).count(),0);
+   console.log(engine.name()+': sign-out cancels foreground request and rejects late owner receipt PASS');
+  }finally{release();}
+  assert.deepEqual(errors,[]);
   await context.close();
   console.log(engine.name()+': Account fixture PASS (PKCE, migration, refresh, offline, A/B isolation, sign-out, revocation, cross-tab token removal, SSO)');
- }finally{await browser.close();}
+ }finally{await browser.close();await new Promise(resolve=>syncFixture.server.close(resolve));}
 }

@@ -23,9 +23,10 @@ import {
   scheduleSentenceReview,
 } from './utils/srs';
 import { createInitialAppState } from './utils/storage';
-import type { Dispatch, SetStateAction } from 'react';
+import type { SetStateAction } from 'react';
+import type {Action} from './sync/model';
 
-export default function App({appState,setAppState}: {appState: PersistedAppState; setAppState: Dispatch<SetStateAction<PersistedAppState>>}) {
+export default function App({appState,setAppState}: {appState: PersistedAppState; setAppState: (update:SetStateAction<PersistedAppState>, action?:Action)=>void}) {
   const [undoStack, setUndoStack] = useState<PersistedAppState[]>([]);
 
   const [activeScreen, setActiveScreen] = useState<AppScreen>(() => {
@@ -192,7 +193,7 @@ export default function App({appState,setAppState}: {appState: PersistedAppState
             [todayStr]: updatedDayLog,
           },
         };
-      });
+      }, {kind:'review',sentenceId,grade,date:todayStr,isNew:isNewCard});
     },
     [todayStr]
   );
@@ -222,7 +223,7 @@ export default function App({appState,setAppState}: {appState: PersistedAppState
 
   const handleUndoLastGrade = useCallback(() => {
     if (undoStack.length === 0) return;
-    setAppState(undoStack[undoStack.length - 1]);
+    setAppState(undoStack[undoStack.length - 1],{kind:'undo'});
     setUndoStack(undoStack.slice(0, -1));
   }, [undoStack, setAppState]);
 
@@ -286,7 +287,7 @@ export default function App({appState,setAppState}: {appState: PersistedAppState
   const handleResetAllProgress = useCallback(() => {
     const fresh = createInitialAppState();
     setUndoStack([]);
-    setAppState(fresh);
+    setAppState(fresh,{kind:'replace'});
   }, []);
 
   const handleSaveOmikujiDraw = useCallback((proverbId: string, dateStr: string) => {
@@ -395,7 +396,7 @@ export default function App({appState,setAppState}: {appState: PersistedAppState
             onUpdateSettings={handleUpdateSettings}
             onImportState={(newState) => {
               setUndoStack([]);
-              setAppState(newState);
+              setAppState(newState,{kind:'replace'});
             }}
             onResetAllProgress={handleResetAllProgress}
           />
