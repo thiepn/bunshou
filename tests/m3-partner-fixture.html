@@ -1,0 +1,31 @@
+<!doctype html><html lang="en"><meta charset="utf-8"><title>Disposable Japanese ecosystem fixture</title>
+<h1 id="title">Disposable counterpart</h1><p id="status" role="status"></p>
+<a id="back" hidden>Find example sentences in Bunshō</a>
+<label id="import-label" hidden>Import Bunshō aggregate snapshot<input id="file" type="file" accept="application/json"></label>
+<p id="metric"></p><a id="resume" hidden>Resume Bunshō</a>
+<script type="module">
+import {parseFragment,link} from '/bunshou/src/interop/contract.ts';
+import {parseSummary} from '/bunshou/src/interop/progress.ts';
+const q=id=>document.getElementById(id);
+if(new URLSearchParams(location.search).get('partner')==='kotoba'){
+ q('title').textContent='Disposable Kotoba';
+ const ref=parseFragment(location.hash);
+ if(ref&&(ref.kind==='vocabulary'||ref.kind==='kanji')){
+  q('status').textContent='Lookup request: '+ref.text;
+  q('back').href=link('bunshou',ref);q('back').hidden=false;
+ }else q('status').textContent='No valid public reference';
+}else{
+ q('title').textContent='Disposable Japanese hub';
+ q('import-label').hidden=false;
+ q('file').addEventListener('change',async()=>{
+  try{
+   const file=q('file').files?.[0];if(!file||file.size>10000)throw Error('size');
+   const s=parseSummary(JSON.parse(await file.text()));if(!s)throw Error('invalid');
+   // This disposable hub imports into this open document only, replacing rather than summing.
+   q('status').textContent='Imported device snapshot — not verified Account progress';
+   q('metric').textContent=s.metrics.sentencesStudied+' / '+s.metrics.sentencesAvailable+' sentences studied';
+   q('resume').href=s.resumeUrl;q('resume').hidden=false;
+  }catch{q('status').textContent='Invalid or unsupported snapshot';}
+ });
+}
+</script></html>

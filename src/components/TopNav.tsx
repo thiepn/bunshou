@@ -8,7 +8,8 @@ export type AppScreen =
   | 'grammar'
   | 'library'
   | 'progress'
-  | 'settings';
+  | 'settings'
+  | 'ecosystem';
 
 interface TopNavProps {
   activeScreen: AppScreen;
@@ -21,6 +22,7 @@ const NAV_ITEMS: Array<{ id: AppScreen; label: string }> = [
   { id: 'curriculum', label: 'Curriculum' },
   { id: 'grammar', label: 'Grammar' },
   { id: 'library', label: 'Library' },
+  { id: 'ecosystem', label: 'Context' },
   { id: 'progress', label: 'Progress' },
   { id: 'settings', label: 'Settings' },
 ];
@@ -28,7 +30,7 @@ const NAV_ITEMS: Array<{ id: AppScreen; label: string }> = [
 export const TopNav: React.FC<TopNavProps> = ({ activeScreen, onNavigate, dueCount }) => {
   return (
     <>
-      <header className="sticky top-0 z-30 flex items-center justify-between gap-8 px-6 py-3.5 bg-[#F7F3EB]/95 dark:bg-[#0D1118]/95 backdrop-blur-sm border-b border-[#DFD6C7] dark:border-slate-800 shadow-[0_1px_0_rgba(200,62,43,0.08)]">
+      <header className="sticky top-0 z-30 flex items-center justify-between gap-3 px-4 py-3.5 bg-[#F7F3EB]/95 dark:bg-[#0D1118]/95 backdrop-blur-sm border-b border-[#DFD6C7] dark:border-slate-800 shadow-[0_1px_0_rgba(200,62,43,0.08)]">
         {/* Zone 1: Single text element wordmark */}
         <button
           type="button"
@@ -41,7 +43,7 @@ export const TopNav: React.FC<TopNavProps> = ({ activeScreen, onNavigate, dueCou
         {/* Zone 2: Concise single-line text navigation links */}
         <nav
           aria-label="Main navigation"
-          className="hidden md:flex items-center gap-6 text-sm font-medium"
+          className="hidden md:flex items-center gap-3 text-sm font-medium"
         >
           {NAV_ITEMS.map((item) => {
             const isActive = activeScreen === item.id;
