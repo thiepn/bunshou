@@ -15,13 +15,13 @@ for(const engine of [chromium,firefox,webkit]){
  try{
   const context=await browser.newContext({serviceWorkers:'block'});
   let loginAs=A, eligible=false, denied=false, issued=0, refreshed=0, probes=0, nonce=0;
-  const codes=new Map(),tokens=new Map(),refreshes=new Map(),errors=[];
+  const codes=new Map(),tokens=new Map(),refreshes=new Map(),errors=[],trace=[];
   const cors={'access-control-allow-origin':origin,'access-control-allow-methods':'GET,POST,OPTIONS','access-control-allow-headers':'authorization,apikey,content-type,accept','cache-control':'no-store'};
   const reply=(route,status,body)=>route.fulfill({status,headers:cors,contentType:'application/json',body:JSON.stringify(body)});
   const issue=owner=>{const n=++issued,access='fixture-access-token-'+n,refresh='fixture-refresh-'+n;tokens.set(access,owner);refreshes.set(refresh,owner);return {access_token:access,refresh_token:refresh,expires_in:3600,token_type:'bearer',scope:'openid email profile offline_access'};};
   await context.route('**/*',async route=>{
    try{
-    const req=route.request(),u=new URL(req.url());
+    const req=route.request(),u=new URL(req.url()); if(req.isNavigationRequest()||u.origin===issuer)trace.push(req.method()+' '+u.origin+u.pathname);
     if(u.origin===origin&&u.pathname.startsWith('/bunshou/')){
      const relative=u.pathname.slice('/bunshou/'.length), path=(!relative||relative==='auth/callback/')?'index.html':relative;
      const file=resolve(root,path);if(!file.startsWith(root+'/'))throw Error('fixture traversal');
@@ -38,7 +38,9 @@ for(const engine of [chromium,firefox,webkit]){
     if(u.pathname==='/auth/v1/oauth/authorize'){
      const p=u.searchParams;assert.equal(p.get('client_id'),client);assert.equal(p.get('redirect_uri'),callback);assert.equal(p.get('response_type'),'code');assert.equal(p.get('code_challenge_method'),'S256');
      const code='fixture-code-'+(++nonce);codes.set(code,{owner:loginAs,challenge:p.get('code_challenge')});
-     return route.fulfill({status:302,headers:{location:callback+'?code='+encodeURIComponent(code)+'&state='+encodeURIComponent(p.get('state'))}});
+     // A new navigation is explicitly routed by Playwright; do not allow a fulfilled 302 to escape interception on redirect. The same callback parameters and PKCE are exercised.
+     const next=callback+'?code='+encodeURIComponent(code)+'&state='+encodeURIComponent(p.get('state'));
+     return route.fulfill({status:200,contentType:'text/html',body:'<script>location.replace('+JSON.stringify(next)+')</script>'});
     }
     if(u.pathname==='/auth/v1/oauth/token'){
      const p=new URLSearchParams(req.postData()||'');assert.equal(p.get('client_id'),client);
@@ -62,15 +64,16 @@ for(const engine of [chromium,firefox,webkit]){
   });
   await context.addInitScript(({origin,raw})=>{if(location.origin===origin&&!localStorage.getItem('fixture-seeded')){localStorage.setItem('bunsho_app_state_v1',raw);localStorage.setItem('fixture-seeded','1');}},{origin,raw});
   const page=await context.newPage();page.on('dialog',d=>d.accept());
+  page.on('pageerror',e=>trace.push('PAGE ERROR '+e.message));page.on('requestfailed',r=>{if(r.isNavigationRequest()||r.url().startsWith(issuer))trace.push('FAILED '+new URL(r.url()).pathname+' '+r.failure()?.errorText);});
   const saved=async p=>p.getByText('Saved on this device',{exact:false}).first().waitFor({state:'visible',timeout:20000});
-  const owner=async(p,id)=>{await p.getByText(emails[id],{exact:true}).waitFor({state:'visible',timeout:20000});await saved(p);};
+  const owner=async(p,id)=>{try{await p.getByText(emails[id],{exact:true}).waitFor({state:'visible',timeout:20000});await saved(p);}catch(e){console.log(engine.name(), 'OWNER_FAILURE',new URL(p.url()).origin+new URL(p.url()).pathname, (await p.locator('body').innerText().catch(()=>'' )).slice(0,600), {issued,refreshed,probes,errors,trace:trace.slice(-35)});throw e;}};
   const guest=async p=>{await p.getByText('Guest workspace',{exact:true}).first().waitFor({state:'visible',timeout:20000});await saved(p);};
   const row=async(p,id)=>p.evaluate(id=>new Promise((resolve,reject)=>{const q=indexedDB.open('thiepn-bunshou-workspaces-v1',1);q.onerror=()=>reject(q.error);q.onsuccess=()=>{const db=q.result,tx=db.transaction('states'),r=tx.objectStore('states').get(id);r.onsuccess=()=>resolve(r.result||null);r.onerror=()=>reject(r.error);tx.oncomplete=()=>db.close();};}),id);
   await page.goto(base);await guest(page);
   await page.getByRole('button',{name:'Continue with THIEPN Account'}).click();await owner(page,A);
   assert.equal(page.url(),base);assert.equal(await page.evaluate(()=>sessionStorage.getItem('thiepn:bunshou:sso:v1:pending')),null);
   await page.getByRole('button',{name:'Move guest progress'}).click();await owner(page,A);
-  const a=await row(page,A),g=await row(page,'guest');assert.deepEqual(JSON.parse(a.raw).favorites,['a11-u01-01']);assert.deepEqual(JSON.parse(g.raw).favorites,[]);assert.equal(g.previousRaw,undefined);
+  let a=await row(page,A);const g=await row(page,'guest');assert.deepEqual(JSON.parse(a.raw).favorites,['a11-u01-01']);assert.deepEqual(JSON.parse(g.raw).favorites,[]);assert.equal(g.previousRaw,undefined);
   await page.evaluate(key=>{const t=JSON.parse(localStorage.getItem(key));t.expiresAt=1;localStorage.setItem(key,JSON.stringify(t));window.dispatchEvent(new Event('focus'));},key);
   await page.waitForFunction(key=>JSON.parse(localStorage.getItem(key))?.expiresAt>Date.now(),key);await owner(page,A);assert.ok(refreshed>=1);
   await page.evaluate(()=>window.dispatchEvent(new Event('focus')));
@@ -79,7 +82,15 @@ for(const engine of [chromium,firefox,webkit]){
   await page.getByRole('button',{name:'Continue offline locally'}).click({timeout:15000});
   await page.getByText('Offline local access',{exact:false}).waitFor({state:'visible'});await owner(page,A);
   assert.equal(await page.getByRole('button',{name:'Move guest progress'}).count(),0);
-  await context.setOffline(false);await owner(page,A);await page.getByText('Offline local access',{exact:false}).waitFor({state:'hidden'});
+  await page.getByRole('button',{name:'Settings',exact:true}).filter({visible:true}).first().click();
+  await page.getByRole('button',{name:'20 / day',exact:true}).click();
+  await saved(page);
+  const offlineSaved=await row(page,A);assert.equal(JSON.parse(offlineSaved.raw).settings.dailyNewTarget,20);assert.ok(offlineSaved.revision>a.revision);assert.deepEqual(JSON.parse(offlineSaved.raw).favorites,['a11-u01-01']);a=offlineSaved;
+  console.log(engine.name()+': offline settings commit and IndexedDB revision PASS');
+  // Cold document with cached app assets simulated by route fulfillment: no fresh Account verification or in-memory lease.
+  const cold=await context.newPage();await cold.goto(base);await cold.getByRole('button',{name:'Continue as guest'}).waitFor({timeout:15000});assert.equal(await cold.getByText(emails[A],{exact:true}).count(),0);assert.equal(await cold.getByRole('button',{name:'Continue offline locally'}).count(),0);await cold.close();
+  console.log(engine.name()+': cold offline private workspace locked PASS');
+  await context.setOffline(false);await owner(page,A);await page.getByText('Offline local access',{exact:false}).waitFor({state:'hidden'});assert.deepEqual((await row(page,A)).raw,a.raw);
   eligible=true;await page.getByRole('button',{name:'Sign out',exact:true}).click();await guest(page);
   const before=issued;await page.reload();await guest(page);assert.equal(issued,before);assert.equal(await page.evaluate(key=>localStorage.getItem(key),key),null);
   loginAs=B;await page.getByRole('button',{name:'Continue with THIEPN Account'}).click();await owner(page,B);
