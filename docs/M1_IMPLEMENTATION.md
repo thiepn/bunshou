@@ -1,0 +1,3 @@
+# Bunshō M1 development candidate
+Baseline 8a1735a52fa56bdd5c11609828644b9d19d1e15b. Bundled exact first-party Account SDK 0.1.0 from 7ebde5df82ecfba6ed0aed6ffbcfccafff493da9, original THIEPN license preserved. No client is registered. Default auth disabled, guest learning must continue. No cloud data access.
+One IndexedDB database with owner-keyed envelopes instead of physically separate databases: a guest claim must be atomic across owners. Same-origin code can access same-origin IndexedDB; path scopes and logical partitioning do not constitute security isolation. Keep service worker scope restricted to /bunshou/. Legacy original bytes and source key preserved. R1 strict parser reused; legacy write APIs removed. No production approval implied.
