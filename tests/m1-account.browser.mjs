@@ -1,5 +1,6 @@
 import {chromium,firefox,webkit} from './.m1-browser-deps/node_modules/playwright/index.mjs';
 import assert from 'node:assert/strict';
+import {startFixture} from './m2-sync-fixture.mjs';
 import {createHash} from 'node:crypto';
 import {readFile} from 'node:fs/promises';
 import {resolve,extname} from 'node:path';
@@ -12,6 +13,7 @@ const mime={'.html':'text/html','.js':'application/javascript','.css':'text/css'
 const root=resolve('dist-m1-fixture');
 for(const engine of [chromium,firefox,webkit]){
  const browser=await engine.launch();
+ const syncFixture=await startFixture();
  try{
   const context=await browser.newContext({serviceWorkers:'block'});
   let loginAs=A, eligible=false, denied=false, issued=0, refreshed=0, probes=0, nonce=0;
@@ -32,6 +34,12 @@ for(const engine of [chromium,firefox,webkit]){
      probes++;assert.equal(u.searchParams.get('client_id'),client);
      const data=JSON.stringify({type:'thiepn:sso-probe:v1',clientId:client,signedIn:eligible,eligible});
      return route.fulfill({status:200,contentType:'text/html',body:'<script>parent.postMessage('+data+','+JSON.stringify(origin)+')</script>'});
+    }
+    if(u.origin==='https://bunshou-m2-fixture.invalid'){
+     if(req.method()==='OPTIONS')return route.fulfill({status:204,headers:cors});
+     assert.ok(['Bearer fixture-a','Bearer fixture-b'].includes(req.headers().authorization));
+     const local=await fetch('http://127.0.0.1:4174'+u.pathname,{method:req.method(),headers:{authorization:req.headers().authorization,'content-type':'application/json'},body:req.postData()});
+     return route.fulfill({status:local.status,headers:cors,contentType:'application/json',body:await local.text()});
     }
     if(u.origin!==issuer)return route.abort();
     if(req.method()==='OPTIONS')return route.fulfill({status:204,headers:cors});
@@ -128,7 +136,30 @@ for(const engine of [chromium,firefox,webkit]){
   await page.reload();await guest(page);
   await page.evaluate(optout=>localStorage.removeItem(optout),optout);await page.reload();await owner(page,A);
   assert.ok(probes>=2);assert.deepEqual(errors,[]);
+  // Real Account UI integration: explicitly sync the fixture-authenticated workspace.
+  await page.getByRole('button',{name:'Sync now (fixture)'}).click();
+  await page.getByText('Fixture sync complete',{exact:false}).waitFor({timeout:30000});
+  assert.equal(JSON.parse(syncFixture.workspaces.get(A).document.raw).settings.dailyNewTarget,20);
+  assert.deepEqual(JSON.parse(syncFixture.workspaces.get(A).document.raw).favorites,['a11-u01-01']);
+  assert.equal((await row(page,A)).sync.pending.length,0);
+  // Another independent disposable device writes a conflicting setting via the
+  // HTTP contract. The original UI must surface both candidates and resolve.
+  await page.getByRole('button',{name:'Settings',exact:true}).filter({visible:true}).first().click();
+  await page.getByRole('button',{name:'30 / day',exact:true}).click();await saved(page);
+  const remote=syncFixture.workspaces.get(A), candidate=JSON.parse(remote.document.raw);candidate.settings.dailyNewTarget=5;
+  const {randomUUID}=await import('node:crypto');
+  const mutation={mutation_id:randomUUID(),primitive:'document',resource_type:'learner_state',resource_id:'progress-v1',operation:'upsert',base_revision:remote.revision,schema_version:1,data:{...remote.document,raw:JSON.stringify(candidate)}};
+  const pushed=await fetch('http://127.0.0.1:4174/v1/sync/push',{method:'POST',headers:{authorization:'Bearer fixture-a','content-type':'application/json'},body:JSON.stringify({protocol_version:1,app_id:'bunshou',device_id:randomUUID(),mutations:[mutation]})});
+  assert.equal((await pushed.json()).results[0].status,'applied');
+  await page.getByRole('button',{name:'Sync now (fixture)'}).click();
+  await page.getByText('Synchronization conflict',{exact:true}).waitFor({timeout:30000});
+  await page.getByRole('button',{name:'Use other device version'}).click();
+  await page.getByText('Fixture sync complete',{exact:false}).waitFor({timeout:30000});
+  const resolved=await row(page,A);assert.equal(JSON.parse(resolved.raw).settings.dailyNewTarget,5);assert.equal(JSON.parse(resolved.sync.archives.at(-1).localRaw).settings.dailyNewTarget,30);assert.equal(resolved.sync.pending.length,0);
+  await page.getByRole('button',{name:'Export sync recovery archive'}).waitFor();
+  console.log(engine.name()+': M2 Account-authorized fixture sync, conflict UI and durable resolution archive PASS');
+  assert.deepEqual(errors,[]);
   await context.close();
   console.log(engine.name()+': Account fixture PASS (PKCE, migration, refresh, offline, A/B isolation, sign-out, revocation, cross-tab token removal, SSO)');
- }finally{await browser.close();}
+ }finally{await browser.close();await new Promise(resolve=>syncFixture.server.close(resolve));}
 }

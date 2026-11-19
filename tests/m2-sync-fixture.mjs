@@ -5,6 +5,7 @@ const workspaces=new Map(), seen=new Map(), devices=new Map();
 let loseNext=false;const expired=new Set();
 const canonical=v=>v===null||typeof v!=='object'?JSON.stringify(v):Array.isArray(v)?'['+v.map(canonical).join(',')+']':'{'+Object.keys(v).sort().map(k=>JSON.stringify(k)+':'+canonical(v[k])).join(',')+'}';
 export async function startFixture(){
+ workspaces.clear();seen.clear();devices.clear();expired.clear();loseNext=false;
  const server=http.createServer(async(req,res)=>{
   const reply=(code,value)=>{res.writeHead(code,{'access-control-allow-origin':'http://127.0.0.1:4173','access-control-allow-headers':'authorization,content-type','access-control-allow-methods':'POST,OPTIONS','content-type':'application/json','cache-control':'no-store'});res.end(JSON.stringify(value));};
   if(req.method==='OPTIONS')return reply(204,{});

@@ -34,6 +34,7 @@ jobs:
           node tests/m2-sync.browser.mjs
       - name: Build disposable Account fixture (not deployed)
         env:
+          VITE_BUNSHOU_M2_FIXTURE: 'true'
           VITE_BUNSHOU_ACCOUNT_ENABLED: 'true'
           VITE_BUNSHOU_ACCOUNT_ISSUER: https://hycegznamzjhwinegaai.supabase.co
           VITE_BUNSHOU_ACCOUNT_PUBLISHABLE_KEY: disposable-fixture-key-not-a-real-key

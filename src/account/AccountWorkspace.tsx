@@ -1,3 +1,6 @@
+import {accountFixtureTransport,fixtureEnabled} from '../sync/fixtureAccount';
+import {synchronize,acceptRemote,keepLocal} from '../sync/engine';
+import {remoteRaw} from '../sync/model';
 import type {Action} from '../sync/model';
 import {useEffect,useRef,useState,useCallback} from 'react';
 import type {SetStateAction} from 'react';
@@ -136,16 +139,44 @@ export default function AccountWorkspace(){
   return <>
     {(offlineMode==='offer'||offlineMode==='checking')&&<main className="max-w-xl mx-auto p-8 space-y-4"><h1 className="text-xl font-bold">Account workspace paused</h1><p role="status">{message}</p>{offlineMode==='offer'&&<><p>Only this open document may continue for up to 30 minutes after online verification. No cloud requests or guest migration are available offline.</p><button className={btn} onClick={()=>{if(leaseValid()&&!navigator.onLine)mode('active');else lock('Offline access unavailable. Reconnect or continue as guest.');}}>Continue offline locally</button></>}<button className={btn} onClick={guest}>Continue as guest</button></main>}
     <div hidden={offlineMode==='offer'||offlineMode==='checking'} inert={offlineMode==='offer'||offlineMode==='checking'}>
-      <ActiveWorkspace key={ready.selection.epoch} ready={ready} message={message} offline={offlineMode!=='none'} configured={!!account.client} connect={connect} signout={signout} reload={()=>{if(!navigator.onLine&&ready.selection.owner!==GUEST){lock('Reconnect before reopening the Account workspace.');return;}select(ready.selection.owner,ready.selection.email);}} isCurrent={()=>active.current===ready&&ready.selection.epoch===epoch.current&&(navigator.onLine||ready.selection.owner===GUEST||leaseValid())}/>
+      <ActiveWorkspace key={ready.selection.epoch} ready={ready} message={message} offline={offlineMode!=='none'} configured={!!account.client} accountClient={account.client} connect={connect} signout={signout} reload={()=>{if(!navigator.onLine&&ready.selection.owner!==GUEST){lock('Reconnect before reopening the Account workspace.');return;}select(ready.selection.owner,ready.selection.email);}} isCurrent={()=>active.current===ready&&ready.selection.epoch===epoch.current&&(navigator.onLine||ready.selection.owner===GUEST||leaseValid())}/>
     </div>
   </>;
 }
-function ActiveWorkspace({ready,message,offline,configured,connect,signout,reload,isCurrent}:{ready:Ready;message:string;offline:boolean;configured:boolean;connect:()=>void;signout:()=>void;reload:()=>void;isCurrent:()=>boolean}){
+function ActiveWorkspace({ready,message,offline,configured,accountClient,connect,signout,reload,isCurrent}:{ready:Ready;message:string;offline:boolean;configured:boolean;accountClient:AccountClient|null;connect:()=>void;signout:()=>void;reload:()=>void;isCurrent:()=>boolean}){
   const {store,selection}=ready;
   const row=useRef(ready.row),draft=useRef(decode(ready.row.raw)),alive=useRef(true),failed=useRef(false),queue=useRef(Promise.resolve()),pendingCount=useRef(0);
   const claiming=useRef(false);
   const [state,setState]=useState(draft.current),[pending,setPending]=useState(0),[failure,setFailure]=useState(''),[dismissed,setDismissed]=useState(false);
   const [queued,setQueued]=useState(ready.row.sync?.pending.length??0);
+  const [syncing,setSyncing]=useState(false),[syncMessage,setSyncMessage]=useState('Not yet synchronized'),[appEpoch,setAppEpoch]=useState(0);
+  const [meta,setMeta]=useState(ready.row.sync);
+  const fixture=fixtureEnabled&&!!accountClient&&selection.owner!==GUEST;
+  const currentRef=useRef(isCurrent);currentRef.current=isCurrent;
+  const reloadFromStore=async()=>{
+    const latest=await store.read(selection.owner);
+    if(!alive.current||!currentRef.current())return;
+    if(latest.raw!==row.current.raw){draft.current=decode(latest.raw);setState(draft.current);setAppEpoch(v=>v+1);}
+    row.current=latest;setQueued(latest.sync?.pending.length??0);setMeta(latest.sync);
+  };
+  const runSync=async(resolve?:'remote'|'local')=>{
+    if(!fixture||!accountClient||offline||!navigator.onLine||pendingCount.current||claiming.current||failed.current||!currentRef.current())return;
+    if(resolve&&!window.confirm(resolve==='remote'?'Use the other device version? This device’s candidate and review events will remain in a recovery archive.':'Replace the synchronized version with this device’s candidate? Both versions will remain in a recovery archive.'))return;
+    claiming.current=true;setSyncing(true);setSyncMessage('Synchronizing disposable fixture…');
+    const current=()=>alive.current&&currentRef.current()&&navigator.onLine;
+    try{
+      if(resolve){const r=await store.read(selection.owner);await (resolve==='remote'?acceptRemote:keepLocal)(store,selection.owner,r.revision,current);}
+      const result=await synchronize(store,selection.owner,accountFixtureTransport(accountClient,selection.owner,current),current);
+      if(current())setSyncMessage(result==='synced'?'Fixture sync complete':result==='conflict'?'Conflict — choose a version':'More changes pending');
+    }catch(e){if(alive.current&&currentRef.current())setSyncMessage('Sync paused — '+(e instanceof Error&&/^SYNC_[A-Z0-9_]+$/.test(e.message)?e.message:'retry required'));}
+    finally{
+      if(alive.current&&currentRef.current()){
+        try{await reloadFromStore();}catch{setSyncMessage('Sync paused — reload workspace');}
+        setSyncing(false);
+      }
+      claiming.current=false;
+    }
+  };
   useEffect(()=>{alive.current=true;return()=>{alive.current=false;};},[]);
   const update=useCallback((action:SetStateAction<PersistedAppState>,syncAction:Action={kind:'edit'})=>{
     if(!alive.current||!isCurrent()||failed.current||claiming.current)return;
@@ -155,7 +186,7 @@ function ActiveWorkspace({ready,message,offline,configured,connect,signout,reloa
     draft.current=next;setState(next);setPending(++pendingCount.current);
     queue.current=queue.current.then(async()=>{
       if(!alive.current||!isCurrent()||failed.current)return;
-      try{row.current=await store.commit(selection.owner,row.current.revision,next,syncAction);if(alive.current&&isCurrent())setQueued(row.current.sync?.pending.length??0);}
+      try{row.current=await store.commit(selection.owner,row.current.revision,next,syncAction);if(alive.current&&isCurrent()){setQueued(row.current.sync?.pending.length??0);setMeta(row.current.sync);if(row.current.sync?.pending.length)setSyncMessage('Local changes pending');}}
       catch(e){failed.current=true;if(alive.current&&isCurrent())setFailure(e instanceof WorkspaceError?e.code:'Save failed. Export unsaved progress before retrying.');}
     }).finally(()=>{pendingCount.current--;if(alive.current&&isCurrent())setPending(pendingCount.current);});
   },[store,selection.owner,isCurrent]);
@@ -173,16 +204,19 @@ function ActiveWorkspace({ready,message,offline,configured,connect,signout,reloa
   return <>
     <section aria-label="Account and workspace" className="bg-[#FCFBF7] dark:bg-[#141923] text-stone-900 dark:text-white border-b border-stone-300 dark:border-slate-700 px-4 py-3">
       <div className="max-w-6xl mx-auto flex flex-wrap items-center gap-3">
-        <div className="flex-1 min-w-40"><strong>{selection.owner===GUEST?'Guest workspace':selection.email||'THIEPN Account'}</strong><p className="text-xs" role="status">{failure?'Workspace paused':pending?'Saving locally…':'Saved on this device'} · Cloud sync {syncPort.status()}{selection.owner!==GUEST&&queued>0?' · '+queued+' local changes queued (not uploaded)':''}{offline?' · Offline local access':''}</p>{selection.owner===GUEST&&<p className="text-xs">{message}</p>}</div>
-        {selection.owner===GUEST?<button className={btn} disabled={!configured||pending>0||!!failure} onClick={connect}>{configured?'Continue with THIEPN Account':'Account not configured'}</button>:<>{!offline&&<a className={btn} href="https://account.thiepn.dev/" target="_blank" rel="noreferrer">Manage Account</a>}<button className={btn} disabled={pending>0||!!failure} onClick={signout}>Sign out</button></>}
-        <button className={btn} disabled={pending>0} onClick={()=>{if(isCurrent())download(row.current.raw,'bunshou-progress.json');}}>Export saved progress</button>
+        <div className="flex-1 min-w-40"><strong>{selection.owner===GUEST?'Guest workspace':selection.email||'THIEPN Account'}</strong><p className="text-xs" role="status">{failure?'Workspace paused':pending?'Saving locally…':'Saved on this device'} · {fixture?'Disposable sync fixture · '+syncMessage:'Cloud sync '+syncPort.status()}{selection.owner!==GUEST&&queued>0?' · '+queued+' local changes queued (not uploaded)':''}{offline?' · Offline local access':''}</p>{selection.owner===GUEST&&<p className="text-xs">{message}</p>}</div>
+        {selection.owner===GUEST?<button className={btn} disabled={!configured||pending>0||!!failure} onClick={connect}>{configured?'Continue with THIEPN Account':'Account not configured'}</button>:<>{!offline&&<a className={btn} href="https://account.thiepn.dev/" target="_blank" rel="noreferrer">Manage Account</a>}<button className={btn} disabled={syncing||pending>0||!!failure} onClick={signout}>Sign out</button></>}
+        {fixture&&<button className={btn} disabled={syncing||offline||pending>0||!!failure||!!meta?.conflict} onClick={()=>void runSync()}>Sync now (fixture)</button>}
+        <button className={btn} disabled={syncing||pending>0} onClick={()=>{if(isCurrent())download(row.current.raw,'bunshou-progress.json');}}>Export saved progress</button>
         {row.current.claimSourceRaw&&<button className={btn} disabled={pending>0} onClick={()=>{if(isCurrent())download(row.current.claimSourceRaw!,'bunshou-claimed-guest-backup.json');}}>Export claimed guest backup</button>}
         {row.current.previousRaw&&<button className={btn} disabled={pending>0} onClick={()=>{if(isCurrent())download(row.current.previousRaw!,'bunshou-previous-progress.json');}}>Export previous state</button>}
       </div>
-      {canClaim&&!dismissed&&<div className="max-w-6xl mx-auto mt-2 flex flex-wrap gap-2 items-center"><span>Guest progress is available ({Object.keys(decode(ready.guest!.raw).records).length} reviews). Move it only to this empty Account workspace?</span><button className={btn} disabled={pending>0} onClick={()=>void claim()}>Move guest progress</button><button className={btn} onClick={()=>setDismissed(true)}>Keep separate</button></div>}
+      {fixture&&meta?.conflict&&<div role="alert" className="max-w-6xl mx-auto mt-3 space-y-2"><strong>Synchronization conflict</strong><p>{meta.conflict.reason==='REMOTE_REPLACEMENT_OR_DELETION'?'Another device replaced or deleted progress. Stale progress will not be restored automatically.':'Both devices changed overlapping progress. Choose a version; neither candidate will be silently discarded.'}</p><div className="flex flex-wrap gap-2"><button className={btn} disabled={syncing||pending>0||offline||!!failure} onClick={()=>void runSync('remote')}>Use other device version</button>{meta.conflict.reason!=='REMOTE_REPLACEMENT_OR_DELETION'&&<button className={btn} disabled={syncing||pending>0||offline||!!failure} onClick={()=>void runSync('local')}>Keep this device version</button>}<button className={btn} onClick={()=>{if(isCurrent())download(JSON.stringify({...meta.conflict,localRaw:row.current.raw,pending:meta.pending}),'bunshou-sync-conflict.json');}}>Export both candidates</button></div></div>}
+      {meta?.archives?.length&&<button className={btn} onClick={()=>{if(isCurrent())download(JSON.stringify(meta.archives),'bunshou-sync-recovery-archive.json');}}>Export sync recovery archive</button>}
+      {canClaim&&!dismissed&&<div className="max-w-6xl mx-auto mt-2 flex flex-wrap gap-2 items-center"><span>Guest progress is available ({Object.keys(decode(ready.guest!.raw).records).length} reviews). Move it only to this empty Account workspace?</span><button className={btn} disabled={syncing||pending>0} onClick={()=>void claim()}>Move guest progress</button><button className={btn} onClick={()=>setDismissed(true)}>Keep separate</button></div>}
       {canClaim&&dismissed&&<button className={btn} onClick={()=>setDismissed(false)}>Review guest migration</button>}
       {failure&&<div role="alert" className="mt-3 max-w-6xl mx-auto"><p>{failure} — unsaved changes have not replaced committed progress.</p><button className={btn} onClick={()=>{if(isCurrent())download(JSON.stringify(draft.current),'bunshou-unsaved-progress.json');}}>Export unsaved progress</button> <button className={btn} onClick={()=>{if(window.confirm('Discard unsaved in-memory changes and reload the saved workspace?'))reload();}}>Reload saved workspace</button></div>}
     </section>
-    {!failure&&<div inert={claiming.current}><App appState={state} setAppState={stableUpdate}/></div>}
+    {!failure&&<div inert={claiming.current}><App key={appEpoch} appState={state} setAppState={stableUpdate}/></div>}
   </>;
 }
