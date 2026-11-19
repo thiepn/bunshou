@@ -1,7 +1,7 @@
 name: Bunshou M1 quality (no deployment)
 on:
   pull_request:
-    branches: [main]
+    branches: [main, feat/bunshou-m1-account-local-workspaces]
   workflow_dispatch:
 permissions:
   contents: read

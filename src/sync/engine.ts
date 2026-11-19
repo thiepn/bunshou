@@ -46,6 +46,6 @@ export async function acceptRemote(store:WorkspaceStore,owner:string,revision:nu
  return store.updateSync(owner,revision,stillCurrent,(r,m)=>{
   if(!m.conflict)throw Error('SYNC_NO_CONFLICT');
   const remote=m.conflict.remote;
-  return {raw:remoteRaw(remote),meta:{...m,remote,pending:[],flight:undefined,conflict:undefined,archives:[...(m.archives??[]),m.conflict]}};
+  return {raw:remoteRaw(remote),meta:{...m,remote,pending:[],flight:undefined,conflict:undefined,archives:[...(m.archives??[]),{...m.conflict,localRaw:r.raw,pending:m.pending}]}};
  });
 }
