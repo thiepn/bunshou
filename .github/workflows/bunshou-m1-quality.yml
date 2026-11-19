@@ -1,0 +1,32 @@
+name: Bunshou M1 quality (no deployment)
+on:
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+      - run: npm ci
+      - run: node scripts/verify-m1-preservation.mjs
+      - run: npm exec -- tsx --test src/data/sentences.test.ts src/storage/workspace.test.ts
+      - run: npm run lint
+      - run: npm run build
+      - run: npm install --no-save --package-lock=false playwright@1.56.1
+      - run: npx playwright install --with-deps chromium firefox webkit
+      - run: |
+          npm run dev -- --port=4173 > /tmp/bunshou-vite.log 2>&1 &
+          for i in $(seq 1 40); do
+            if curl --fail --silent http://127.0.0.1:4173/bunshou/ >/dev/null; then break; fi
+            sleep 1
+          done
+          node tests/m1-workspace.browser.mjs

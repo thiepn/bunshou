@@ -221,13 +221,10 @@ export default function App({appState,setAppState}: {appState: PersistedAppState
   }, [todayStr]);
 
   const handleUndoLastGrade = useCallback(() => {
-    setUndoStack((stack) => {
-      if (stack.length === 0) return stack;
-      const previousState = stack[stack.length - 1];
-      setAppState(previousState);
-      return stack.slice(0, -1);
-    });
-  }, []);
+    if (undoStack.length === 0) return;
+    setAppState(undoStack[undoStack.length - 1]);
+    setUndoStack(undoStack.slice(0, -1));
+  }, [undoStack, setAppState]);
 
   const handleStartStudy = useCallback((config: StudyLaunchConfig) => {
     setStudyLaunchConfig(config);

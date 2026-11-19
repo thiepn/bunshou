@@ -18,26 +18,28 @@ export default function AccountWorkspace(){
   const [ready,setReady]=useState<Ready|null>(null);
   const [error,setError]=useState<WorkspaceError|null>(null);
   const active=useRef<Ready|null>(null),epoch=useRef(0),identityEpoch=useRef(0),lastIdentity=useRef(''),settled=useRef(false);
+  const selectedOwner=useRef<string|null>(null);
   const select=useCallback((owner:string,email?:string|null)=>{
+    selectedOwner.current=owner;
     active.current?.store.close();active.current=null;
     const next={owner,email,epoch:++epoch.current};setReady(null);setError(null);setSelection(next);
     try{window.speechSynthesis?.cancel();}catch{}
   },[]);
-  const lock=useCallback((text:string)=>{active.current?.store.close();active.current=null;++epoch.current;setReady(null);setSelection(null);setError(null);setMessage(text);try{window.speechSynthesis?.cancel();}catch{}},[]);
+  const lock=useCallback((text:string)=>{selectedOwner.current=null;active.current?.store.close();active.current=null;++epoch.current;setReady(null);setSelection(null);setError(null);setMessage(text);try{window.speechSynthesis?.cancel();}catch{}},[]);
   useEffect(()=>{
     const client=account.client;let disposed=false;let running=false;let queued=false;
     if(!client){select(GUEST);setMessage(account.error||'Account connection not configured');return;}
     const publish=async(identity:Identity)=>{
       if(disposed)return;
       const token=++identityEpoch.current;
-      if(identity.status==='signed-out'){lastIdentity.current='signed-out';select(GUEST);setMessage('Guest workspace');return;}
+      if(identity.status==='signed-out'){lastIdentity.current='signed-out';if(selectedOwner.current!==GUEST)select(GUEST);setMessage('Guest workspace');return;}
       if(identity.status!=='signed-in'){lastIdentity.current='unavailable';lock('Account unavailable. Retry or use the separate guest workspace.');return;}
       const key='account:'+identity.id;
       if(lastIdentity.current!==key){lock('Verifying Account connection…');lastIdentity.current=key;}
       try{
         const checked=await client.verifyConnection(identity);
         if(disposed||token!==identityEpoch.current)return;
-        if(checked.status==='signed-in'&&checked.id===identity.id){if(active.current?.selection.owner!==checked.id)select(checked.id,checked.email);setMessage('Account connected');}
+        if(checked.status==='signed-in'&&checked.id===identity.id){if(selectedOwner.current!==checked.id)select(checked.id,checked.email);setMessage('Account connected');}
         else{lastIdentity.current='unavailable';lock('Account connection unavailable. Reconnect or continue as guest.');}
       }catch{if(!disposed&&token===identityEpoch.current){lastIdentity.current='unavailable';lock('Account verification failed. Retry or use guest.');}}
     };
@@ -82,7 +84,7 @@ export default function AccountWorkspace(){
   },[selection]);
   const signout=()=>{++identityEpoch.current;lastIdentity.current='signed-out';lock('Signing out…');try{account.client?.sso.signOutLocal();}catch{setMessage('Account session could not be cleared. Reload or manage Account.');return;}select(GUEST);setMessage('Signed out of Bunshō');};
   const connect=()=>{++identityEpoch.current;lock('Opening THIEPN Account…');void account.client?.sso.connect().catch(()=>setMessage('Account connection failed. Retry or continue as guest.'));};
-  const guest=()=>{++identityEpoch.current;lastIdentity.current='signed-out';try{account.client?.sso.signOutLocal();}catch{}select(GUEST);setMessage('Guest workspace');};
+  const guest=signout;
   const retry=()=>location.reload();
   if(!ready)return <main className="max-w-xl mx-auto p-8 space-y-4"><h1 className="text-xl font-bold">Bunshō workspace</h1><p role="status">{error?error.code:message}</p>{error?.raw!==undefined&&<button className={btn} onClick={()=>download(error.raw!,'bunshou-original-recovery.json')}>Export original bytes</button>}{error?.recoveryRaw!==undefined&&<button className={btn} onClick={()=>download(error.recoveryRaw!,'bunshou-recovery.json')}>Export recovery copy</button>}<div className="flex flex-wrap gap-2"><button className={btn} onClick={retry}>Retry</button>{account.client&&<button className={btn} onClick={connect}>Continue with THIEPN Account</button>}<button className={btn} onClick={guest}>Continue as guest</button></div></main>;
   return <ActiveWorkspace key={ready.selection.epoch} ready={ready} message={message} configured={!!account.client} connect={connect} signout={signout} reload={()=>select(ready.selection.owner,ready.selection.email)} isCurrent={()=>active.current===ready&&ready.selection.epoch===epoch.current}/>;
@@ -90,10 +92,11 @@ export default function AccountWorkspace(){
 function ActiveWorkspace({ready,message,configured,connect,signout,reload,isCurrent}:{ready:Ready;message:string;configured:boolean;connect:()=>void;signout:()=>void;reload:()=>void;isCurrent:()=>boolean}){
   const {store,selection}=ready;
   const row=useRef(ready.row),draft=useRef(decode(ready.row.raw)),alive=useRef(true),failed=useRef(false),queue=useRef(Promise.resolve()),pendingCount=useRef(0);
+  const claiming=useRef(false);
   const [state,setState]=useState(draft.current),[pending,setPending]=useState(0),[failure,setFailure]=useState(''),[dismissed,setDismissed]=useState(false);
   useEffect(()=>{alive.current=true;return()=>{alive.current=false;};},[]);
   const update=useCallback((action:SetStateAction<PersistedAppState>)=>{
-    if(!alive.current||!isCurrent()||failed.current)return;
+    if(!alive.current||!isCurrent()||failed.current||claiming.current)return;
     let next:PersistedAppState;
     try{next=typeof action==='function'?action(draft.current):action;encode(next);}catch{failed.current=true;setFailure('Invalid change rejected. Reload committed workspace.');return;}
     if(next===draft.current)return;
@@ -109,10 +112,10 @@ function ActiveWorkspace({ready,message,configured,connect,signout,reload,isCurr
   const claim=async()=>{
     if(!ready.guest||pendingCount.current||!isCurrent()||failed.current)return;
     if(!window.confirm('Move this device’s guest progress to this Account? The guest copy will be retained as a recovery snapshot.'))return;
-    setPending(++pendingCount.current);
+    claiming.current=true;setPending(++pendingCount.current);
     try{await store.claimGuest(selection.owner,ready.guest.revision,row.current.revision,isCurrent);if(isCurrent())reload();}
     catch(e){if(isCurrent())setFailure(e instanceof WorkspaceError?e.code:'Guest claim failed');}
-    finally{pendingCount.current--;if(isCurrent())setPending(pendingCount.current);}
+    finally{claiming.current=false;pendingCount.current--;if(isCurrent())setPending(pendingCount.current);}
   };
   const canClaim=selection.owner!==GUEST&&row.current.revision===0&&!!ready.guest&&ready.guest.revision>0&&ready.guest.raw!==encode(createInitialAppState());
   return <>
@@ -126,6 +129,6 @@ function ActiveWorkspace({ready,message,configured,connect,signout,reload,isCurr
       {canClaim&&!dismissed&&<div className="max-w-6xl mx-auto mt-2 flex flex-wrap gap-2 items-center"><span>Guest progress is available ({Object.keys(decode(ready.guest!.raw).records).length} reviews). Move it only to this empty Account workspace?</span><button className={btn} disabled={pending>0} onClick={()=>void claim()}>Move guest progress</button><button className={btn} onClick={()=>setDismissed(true)}>Keep separate</button></div>}
       {failure&&<div role="alert" className="mt-3 max-w-6xl mx-auto"><p>{failure} — unsaved changes have not replaced committed progress.</p><button className={btn} onClick={()=>{if(isCurrent())download(JSON.stringify(draft.current),'bunshou-unsaved-progress.json');}}>Export unsaved progress</button> <button className={btn} onClick={()=>{if(window.confirm('Discard unsaved in-memory changes and reload the saved workspace?'))reload();}}>Reload saved workspace</button></div>}
     </section>
-    {!failure&&<App appState={state} setAppState={stableUpdate}/>}
+    {!failure&&<div inert={claiming.current}><App appState={state} setAppState={stableUpdate}/></div>}
   </>;
 }

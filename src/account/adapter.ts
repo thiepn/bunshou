@@ -8,7 +8,7 @@ export function createAccount() {
   const env=import.meta.env;
   const issuer=env.VITE_BUNSHOU_ACCOUNT_ISSUER, key=env.VITE_BUNSHOU_ACCOUNT_PUBLISHABLE_KEY, clientId=env.VITE_BUNSHOU_OAUTH_CLIENT_ID;
   if(env.VITE_BUNSHOU_ACCOUNT_ENABLED!=='true') return null;
-  if(!issuer || !key || !clientId) throw Error('ACCOUNT_CONFIG_INCOMPLETE');
+  if(issuer!=="https://hycegznamzjhwinegaai.supabase.co" || !key || !clientId) throw Error('ACCOUNT_CONFIG_INCOMPLETE');
   const redirect=env.VITE_BUNSHOU_CALLBACK_URL || CALLBACK;
   if(redirect!==CALLBACK || location.origin!==new URL(CALLBACK).origin) throw Error('ACCOUNT_ROUTE_NOT_CONFIGURED');
   const session=createThiepnAccountSession({issuer,publishableKey:key,clientId,redirectUri:redirect,storageKey:SESSION_KEY,authPolicy:'guest-first'});
