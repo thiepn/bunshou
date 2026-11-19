@@ -7,6 +7,16 @@ for(const engine of [chromium,firefox,webkit]){
  try{
   const context=await browser.newContext({acceptDownloads:true});
   const page=await context.newPage();
+  const diagnostics=[];
+  page.on('pageerror',e=>diagnostics.push('pageerror: '+e.message));
+  page.on('console',m=>{if(m.type()==='error')diagnostics.push('console: '+m.text());});
+  page.on('response',r=>{if(r.status()>=400&&r.url().startsWith(base))diagnostics.push('HTTP '+r.status()+' '+new URL(r.url()).pathname);});
+  // Serve the exact fixture bytes rather than treating a test-only HTML document
+  // as a second Vite HTML entry (which may rewrite its base-prefixed imports).
+  // Its module requests still go through the real Vite server at /bunshou/src/.
+  const fixtureHtml=await readFile(new URL('./m3-partner-fixture.html',import.meta.url),'utf8');
+  await context.route(base+'tests/m3-partner-fixture.html?*',route=>route.fulfill({status:200,contentType:'text/html',body:fixtureHtml}));
+  try{
   await context.route('https://japanese.thiepn.dev/**',async route=>{
    const u=new URL(route.request().url());
    if(!['/','/kotoba/','/bunshou/'].includes(u.pathname)||!route.request().isNavigationRequest())return route.abort();
@@ -57,6 +67,10 @@ for(const engine of [chromium,firefox,webkit]){
   await page.getByText('0 contextual examples.',{exact:false}).waitFor();
   await page.goto(base+'#jv=2&kind=review');
   await page.getByRole('heading',{name:'Context & Japanese ecosystem'}).waitFor();
+  }catch(e){
+   console.error(engine.name()+' M3 failure', {url:page.url(),body:(await page.locator('body').innerText().catch(()=>'' )).slice(0,700),diagnostics:diagnostics.slice(-20)});
+   throw e;
+  }
   await context.close();
   console.log(engine.name()+': M3 public references, contextual search, explicit practice, aggregate export, hub snapshot and invalid link PASS');
  }finally{await browser.close();}
