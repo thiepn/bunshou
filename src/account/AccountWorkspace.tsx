@@ -17,15 +17,18 @@ export default function AccountWorkspace(){
   const [message,setMessage]=useState('Checking Account session…');
   const [ready,setReady]=useState<Ready|null>(null);
   const [error,setError]=useState<WorkspaceError|null>(null);
+  const [recovering,setRecovering]=useState(false);
+  const recoveryStore=useRef<WorkspaceStore|null>(null);
   const active=useRef<Ready|null>(null),epoch=useRef(0),identityEpoch=useRef(0),lastIdentity=useRef(''),settled=useRef(false);
   const selectedOwner=useRef<string|null>(null);
   const select=useCallback((owner:string,email?:string|null)=>{
+    recoveryStore.current?.close();recoveryStore.current=null;setRecovering(false);
     selectedOwner.current=owner;
     active.current?.store.close();active.current=null;
     const next={owner,email,epoch:++epoch.current};setReady(null);setError(null);setSelection(next);
     try{window.speechSynthesis?.cancel();}catch{}
   },[]);
-  const lock=useCallback((text:string)=>{selectedOwner.current=null;active.current?.store.close();active.current=null;++epoch.current;setReady(null);setSelection(null);setError(null);setMessage(text);try{window.speechSynthesis?.cancel();}catch{}},[]);
+  const lock=useCallback((text:string)=>{recoveryStore.current?.close();recoveryStore.current=null;setRecovering(false);selectedOwner.current=null;active.current?.store.close();active.current=null;++epoch.current;setReady(null);setSelection(null);setError(null);setMessage(text);try{window.speechSynthesis?.cancel();}catch{}},[]);
   useEffect(()=>{
     const client=account.client;let disposed=false;let running=false;let queued=false;
     if(!client){select(GUEST);setMessage(account.error||'Account connection not configured');return;}
@@ -86,7 +89,23 @@ export default function AccountWorkspace(){
   const connect=()=>{++identityEpoch.current;lock('Opening THIEPN Account…');void account.client?.sso.connect().catch(()=>setMessage('Account connection failed. Retry or continue as guest.'));};
   const guest=signout;
   const retry=()=>location.reload();
-  if(!ready)return <main className="max-w-xl mx-auto p-8 space-y-4"><h1 className="text-xl font-bold">Bunshō workspace</h1><p role="status">{error?error.code:message}</p>{error?.raw!==undefined&&<button className={btn} onClick={()=>download(error.raw!,'bunshou-original-recovery.json')}>Export original bytes</button>}{error?.recoveryRaw!==undefined&&<button className={btn} onClick={()=>download(error.recoveryRaw!,'bunshou-recovery.json')}>Export recovery copy</button>}<div className="flex flex-wrap gap-2"><button className={btn} onClick={retry}>Retry</button>{account.client&&<button className={btn} onClick={connect}>Continue with THIEPN Account</button>}<button className={btn} onClick={guest}>Continue as guest</button></div></main>;
+  const recover=async(raw:string)=>{
+    const selected=selection,e=error;
+    if(!selected||!e||e.raw===undefined||recovering||!['LEGACY_RECOVERY_REQUIRED','RECOVERY_REQUIRED'].includes(e.code))return;
+    if(!window.confirm('Restore this validated backup into this workspace? Original damaged bytes will be preserved.'))return;
+    const current=()=>selected.epoch===epoch.current&&selectedOwner.current===selected.owner;
+    setRecovering(true);let store:WorkspaceStore|undefined;
+    try{
+      decode(raw);
+      store=await WorkspaceStore.open();if(!current())return;
+      recoveryStore.current=store;
+      if(e.code==='LEGACY_RECOVERY_REQUIRED')await store.restoreLegacy(window.localStorage,e.raw,raw,current);
+      else await store.restoreDamaged(selected.owner,e.raw,raw,current);
+      if(current())select(selected.owner,selected.email);
+    }catch(reason){if(current())setMessage(reason instanceof WorkspaceError?reason.code:'Recovery failed; original preserved.');}
+    finally{store?.close();if(recoveryStore.current===store)recoveryStore.current=null;if(current())setRecovering(false);}
+  };
+  if(!ready)return <main className="max-w-xl mx-auto p-8 space-y-4"><h1 className="text-xl font-bold">Bunshō workspace</h1><p role="status">{error?error.code:message}</p>{error&&<p role="status">{message}</p>}{error?.raw!==undefined&&<button className={btn} onClick={()=>download(error.raw!,'bunshou-original-recovery.json')}>Export original bytes</button>}{error?.recoveryRaw!==undefined&&<button className={btn} onClick={()=>download(error.recoveryRaw!,'bunshou-recovery.json')}>Export recovery copy</button>}{error&&['LEGACY_RECOVERY_REQUIRED','RECOVERY_REQUIRED'].includes(error.code)&&<div className="space-y-2">{error.recoveryRaw!==undefined&&<button className={btn} disabled={recovering} onClick={()=>void recover(error.recoveryRaw!)}>Restore validated recovery copy</button>}<label className="block">Restore a backup file<input aria-label="Recovery backup file" type="file" accept="application/json,.json" disabled={recovering} onChange={e=>{const file=e.currentTarget.files?.[0];if(file){const captured=selection?.epoch;void file.text().then(raw=>{if(captured===epoch.current)void recover(raw);}).catch(()=>setMessage('Could not read recovery file.'));}}}/></label></div>}<div className="flex flex-wrap gap-2"><button className={btn} disabled={recovering} onClick={retry}>Retry</button>{account.client&&<button className={btn} onClick={connect}>Continue with THIEPN Account</button>}<button className={btn} onClick={guest}>Continue as guest</button></div></main>;
   return <ActiveWorkspace key={ready.selection.epoch} ready={ready} message={message} configured={!!account.client} connect={connect} signout={signout} reload={()=>select(ready.selection.owner,ready.selection.email)} isCurrent={()=>active.current===ready&&ready.selection.epoch===epoch.current}/>;
 }
 function ActiveWorkspace({ready,message,configured,connect,signout,reload,isCurrent}:{ready:Ready;message:string;configured:boolean;connect:()=>void;signout:()=>void;reload:()=>void;isCurrent:()=>boolean}){
@@ -111,7 +130,7 @@ function ActiveWorkspace({ready,message,configured,connect,signout,reload,isCurr
   const [stableUpdate]=useState(()=>update);
   const claim=async()=>{
     if(!ready.guest||pendingCount.current||!isCurrent()||failed.current)return;
-    if(!window.confirm('Move this device’s guest progress to this Account? The guest copy will be retained as a recovery snapshot.'))return;
+    if(!window.confirm('Move this device’s guest progress to this Account? A recovery snapshot will be retained inside this Account workspace.'))return;
     claiming.current=true;setPending(++pendingCount.current);
     try{await store.claimGuest(selection.owner,ready.guest.revision,row.current.revision,isCurrent);if(isCurrent())reload();}
     catch(e){if(isCurrent())setFailure(e instanceof WorkspaceError?e.code:'Guest claim failed');}
@@ -124,9 +143,11 @@ function ActiveWorkspace({ready,message,configured,connect,signout,reload,isCurr
         <div className="flex-1 min-w-40"><strong>{selection.owner===GUEST?'Guest workspace':selection.email||'THIEPN Account'}</strong><p className="text-xs" role="status">{failure?'Workspace paused':pending?'Saving locally…':'Saved on this device'} · Cloud sync {syncPort.status()}</p>{selection.owner===GUEST&&<p className="text-xs">{message}</p>}</div>
         {selection.owner===GUEST?<button className={btn} disabled={!configured||pending>0||!!failure} onClick={connect}>{configured?'Continue with THIEPN Account':'Account not configured'}</button>:<><a className={btn} href="https://account.thiepn.dev/" target="_blank" rel="noreferrer">Manage Account</a><button className={btn} disabled={pending>0||!!failure} onClick={signout}>Sign out</button></>}
         <button className={btn} disabled={pending>0} onClick={()=>{if(isCurrent())download(row.current.raw,'bunshou-progress.json');}}>Export saved progress</button>
+        {row.current.claimSourceRaw&&<button className={btn} disabled={pending>0} onClick={()=>{if(isCurrent())download(row.current.claimSourceRaw!,'bunshou-claimed-guest-backup.json');}}>Export claimed guest backup</button>}
         {row.current.previousRaw&&<button className={btn} disabled={pending>0} onClick={()=>{if(isCurrent())download(row.current.previousRaw!,'bunshou-previous-progress.json');}}>Export previous state</button>}
       </div>
       {canClaim&&!dismissed&&<div className="max-w-6xl mx-auto mt-2 flex flex-wrap gap-2 items-center"><span>Guest progress is available ({Object.keys(decode(ready.guest!.raw).records).length} reviews). Move it only to this empty Account workspace?</span><button className={btn} disabled={pending>0} onClick={()=>void claim()}>Move guest progress</button><button className={btn} onClick={()=>setDismissed(true)}>Keep separate</button></div>}
+      {canClaim&&dismissed&&<button className={btn} onClick={()=>setDismissed(false)}>Review guest migration</button>}
       {failure&&<div role="alert" className="mt-3 max-w-6xl mx-auto"><p>{failure} — unsaved changes have not replaced committed progress.</p><button className={btn} onClick={()=>{if(isCurrent())download(JSON.stringify(draft.current),'bunshou-unsaved-progress.json');}}>Export unsaved progress</button> <button className={btn} onClick={()=>{if(window.confirm('Discard unsaved in-memory changes and reload the saved workspace?'))reload();}}>Reload saved workspace</button></div>}
     </section>
     {!failure&&<div inert={claiming.current}><App appState={state} setAppState={stableUpdate}/></div>}

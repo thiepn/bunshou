@@ -5,7 +5,7 @@ export const DB_NAME = 'thiepn-bunshou-workspaces-v1';
 export const GUEST = 'guest';
 export const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 export type Owner = string;
-export type Envelope = { owner: Owner; revision: number; raw: string; previousRaw?: string; legacyRaw?: string; claimedFrom?: number };
+export type Envelope = { owner: Owner; revision: number; raw: string; previousRaw?: string; legacyRaw?: string; claimedFrom?: number; claimSourceRaw?: string };
 type Receipt = { key: 'legacy'; raw: string | null };
 export class WorkspaceError extends Error {
   constructor(public code: string, public raw?: string, public recoveryRaw?: string) { super(code); }
@@ -90,8 +90,31 @@ export class WorkspaceStore {
       if ((current?.revision ?? 0)!==revision || (current && current.owner!==owner)) throw new WorkspaceError('REVISION_CONFLICT');
       if(current) decode(current.raw);
       if(current?.raw===raw) return current;
-      const next: Envelope={owner,revision:revision+1,raw,previousRaw:current?.raw,legacyRaw:current?.legacyRaw,claimedFrom:current?.claimedFrom};
+      const next: Envelope={owner,revision:revision+1,raw,previousRaw:current?.raw,legacyRaw:current?.legacyRaw,claimedFrom:current?.claimedFrom,claimSourceRaw:current?.claimSourceRaw};
       await request(store.put(next)); return next;
+    });
+  }
+  /** Explicit recovery replaces a damaged row only if the exact bytes are still current. */
+  async restoreDamaged(owner: Owner, expectedRaw: string, replacement: string, stillAuthorized: () => boolean) {
+    ownerCheck(owner); const raw=encode(decode(replacement));
+    return this.run(['states'],'readwrite',async tx=>{
+      const store=tx.objectStore('states'), row=await request<Envelope|undefined>(store.get(owner));
+      if(!row||row.owner!==owner||row.raw!==expectedRaw||!Number.isSafeInteger(row.revision)||row.revision<1||!stillAuthorized()) throw new WorkspaceError('RECOVERY_CONFLICT');
+      const next:Envelope={...row,revision:row.revision+1,raw,previousRaw:row.raw};
+      await request(store.put(next));
+      if(!stillAuthorized()) throw new WorkspaceError('RECOVERY_CANCELLED');
+      return next;
+    });
+  }
+  /** Restore a valid legacy backup into an empty guest destination, preserving exact damaged source. */
+  async restoreLegacy(storage: Pick<Storage,'getItem'>, expectedRaw: string, replacement:string, stillAuthorized:()=>boolean) {
+    const raw=encode(decode(replacement));
+    return this.run(['states','meta'],'readwrite',async tx=>{
+      const states=tx.objectStore('states'),meta=tx.objectStore('meta');
+      if(storage.getItem(STORAGE_KEY)!==expectedRaw||await request(meta.get('legacy'))||await request(states.get(GUEST))||!stillAuthorized()) throw new WorkspaceError('LEGACY_RECOVERY_CONFLICT');
+      await request(states.add({owner:GUEST,revision:1,raw,legacyRaw:expectedRaw} satisfies Envelope));
+      await request(meta.add({key:'legacy',raw:expectedRaw} satisfies Receipt));
+      if(!stillAuthorized()) throw new WorkspaceError('RECOVERY_CANCELLED');
     });
   }
   /** One atomic transaction across owner-keyed rows, no cross-database partial move. */
@@ -103,9 +126,9 @@ export class WorkspaceStore {
       const target=await request<Envelope|undefined>(store.get(owner));
       if(!guest || guest.revision!==guestRevision || (target?.revision??0)!==targetRevision || target || guest.raw===initialRaw() || !stillAuthorized()) throw new WorkspaceError('CLAIM_CONFLICT');
       decode(guest.raw);
-      const next: Envelope={owner,revision:1,raw:guest.raw,legacyRaw:guest.legacyRaw,claimedFrom:guestRevision};
+      const next: Envelope={owner,revision:1,raw:guest.raw,legacyRaw:guest.legacyRaw,claimedFrom:guestRevision,claimSourceRaw:guest.raw};
       await request(store.add(next));
-      await request(store.put({owner:GUEST,revision:guest.revision+1,raw:initialRaw(),previousRaw:guest.raw,legacyRaw:guest.legacyRaw,claimedFrom:guestRevision} satisfies Envelope));
+      await request(store.put({owner:GUEST,revision:guest.revision+1,raw:initialRaw(),claimedFrom:guestRevision} satisfies Envelope));
       if(!stillAuthorized()) throw new WorkspaceError('CLAIM_CANCELLED');
       return next;
     });
