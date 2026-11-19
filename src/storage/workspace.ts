@@ -1,3 +1,4 @@
+import {appendLocal,initialMeta, type Action,type SyncMeta} from '../sync/model';
 import type { PersistedAppState } from '../types/curriculum';
 import { createInitialAppState, validateAndParseBackupJson, STORAGE_KEY } from '../utils/storage';
 
@@ -5,7 +6,7 @@ export const DB_NAME = 'thiepn-bunshou-workspaces-v1';
 export const GUEST = 'guest';
 export const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 export type Owner = string;
-export type Envelope = { owner: Owner; revision: number; raw: string; previousRaw?: string; legacyRaw?: string; claimedFrom?: number; claimSourceRaw?: string };
+export type Envelope = { owner: Owner; revision: number; raw: string; previousRaw?: string; legacyRaw?: string; claimedFrom?: number; claimSourceRaw?: string; sync?: SyncMeta };
 type Receipt = { key: 'legacy'; raw: string | null };
 export class WorkspaceError extends Error {
   constructor(public code: string, public raw?: string, public recoveryRaw?: string) { super(code); }
@@ -82,7 +83,7 @@ export class WorkspaceStore {
       return row;
     });
   }
-  async commit(owner: Owner, revision: number, state: PersistedAppState): Promise<Envelope> {
+  async commit(owner: Owner, revision: number, state: PersistedAppState, action:Action={kind:'edit'}): Promise<Envelope> {
     ownerCheck(owner); const raw = encode(state);
     return this.run(['states'],'readwrite',async tx => {
       const store = tx.objectStore('states');
@@ -90,8 +91,21 @@ export class WorkspaceStore {
       if ((current?.revision ?? 0)!==revision || (current && current.owner!==owner)) throw new WorkspaceError('REVISION_CONFLICT');
       if(current) decode(current.raw);
       if(current?.raw===raw) return current;
-      const next: Envelope={owner,revision:revision+1,raw,previousRaw:current?.raw,legacyRaw:current?.legacyRaw,claimedFrom:current?.claimedFrom,claimSourceRaw:current?.claimSourceRaw};
+      const next: Envelope={owner,revision:revision+1,raw,previousRaw:current?.raw,legacyRaw:current?.legacyRaw,claimedFrom:current?.claimedFrom,claimSourceRaw:current?.claimSourceRaw,sync:owner===GUEST?undefined:appendLocal(current?.sync,action,!!current)};
       await request(store.put(next)); return next;
+    });
+  }
+  /** Atomically advance local state and sync receipt, fenced by owner and local revision. */
+  async updateSync(owner:Owner,revision:number,stillCurrent:()=>boolean,update:(row:Envelope,meta:SyncMeta)=>{raw:string;meta:SyncMeta}):Promise<Envelope>{
+    ownerCheck(owner);if(owner===GUEST)throw new WorkspaceError('SYNC_GUEST_FORBIDDEN');
+    return this.run(['states'],'readwrite',async tx=>{
+      const store=tx.objectStore('states'),existing=await request<Envelope|undefined>(store.get(owner));
+      if((existing?.revision??0)!==revision||!stillCurrent()||(existing&&existing.owner!==owner))throw new WorkspaceError('SYNC_LOCAL_REVISION_CONFLICT');
+      const row=existing??{owner,revision:0,raw:initialRaw()};
+      const meta=row.sync??(existing?appendLocal(undefined,{kind:'replace'}):initialMeta());
+      const result=update(row,meta);decode(result.raw);
+      const next:Envelope={...row,revision:revision+1,raw:result.raw,previousRaw:row.raw===result.raw?row.previousRaw:row.raw,sync:result.meta};
+      await request(store.put(next));if(!stillCurrent())throw new WorkspaceError('SYNC_OWNER_CHANGED');return next;
     });
   }
   /** Explicit recovery replaces a damaged row only if the exact bytes are still current. */
@@ -100,7 +114,7 @@ export class WorkspaceStore {
     return this.run(['states'],'readwrite',async tx=>{
       const store=tx.objectStore('states'), row=await request<Envelope|undefined>(store.get(owner));
       if(!row||row.owner!==owner||row.raw!==expectedRaw||!Number.isSafeInteger(row.revision)||row.revision<1||!stillAuthorized()) throw new WorkspaceError('RECOVERY_CONFLICT');
-      const next:Envelope={...row,revision:row.revision+1,raw,previousRaw:row.raw};
+      const next:Envelope={...row,revision:row.revision+1,raw,previousRaw:row.raw,sync:owner===GUEST?undefined:appendLocal(row.sync,{kind:'replace'},true)};
       await request(store.put(next));
       if(!stillAuthorized()) throw new WorkspaceError('RECOVERY_CANCELLED');
       return next;
@@ -126,7 +140,7 @@ export class WorkspaceStore {
       const target=await request<Envelope|undefined>(store.get(owner));
       if(!guest || guest.revision!==guestRevision || (target?.revision??0)!==targetRevision || target || guest.raw===initialRaw() || !stillAuthorized()) throw new WorkspaceError('CLAIM_CONFLICT');
       decode(guest.raw);
-      const next: Envelope={owner,revision:1,raw:guest.raw,legacyRaw:guest.legacyRaw,claimedFrom:guestRevision,claimSourceRaw:guest.raw};
+      const next: Envelope={owner,revision:1,raw:guest.raw,legacyRaw:guest.legacyRaw,claimedFrom:guestRevision,claimSourceRaw:guest.raw,sync:appendLocal(undefined,{kind:'replace'})};
       await request(store.add(next));
       await request(store.put({owner:GUEST,revision:guest.revision+1,raw:initialRaw(),claimedFrom:guestRevision} satisfies Envelope));
       if(!stillAuthorized()) throw new WorkspaceError('CLAIM_CANCELLED');

@@ -1,3 +1,4 @@
+import type {Action} from '../sync/model';
 import {useEffect,useRef,useState,useCallback} from 'react';
 import type {SetStateAction} from 'react';
 import App from '../App';
@@ -144,8 +145,9 @@ function ActiveWorkspace({ready,message,offline,configured,connect,signout,reloa
   const row=useRef(ready.row),draft=useRef(decode(ready.row.raw)),alive=useRef(true),failed=useRef(false),queue=useRef(Promise.resolve()),pendingCount=useRef(0);
   const claiming=useRef(false);
   const [state,setState]=useState(draft.current),[pending,setPending]=useState(0),[failure,setFailure]=useState(''),[dismissed,setDismissed]=useState(false);
+  const [queued,setQueued]=useState(ready.row.sync?.pending.length??0);
   useEffect(()=>{alive.current=true;return()=>{alive.current=false;};},[]);
-  const update=useCallback((action:SetStateAction<PersistedAppState>)=>{
+  const update=useCallback((action:SetStateAction<PersistedAppState>,syncAction:Action={kind:'edit'})=>{
     if(!alive.current||!isCurrent()||failed.current||claiming.current)return;
     let next:PersistedAppState;
     try{next=typeof action==='function'?action(draft.current):action;encode(next);}catch{failed.current=true;setFailure('Invalid change rejected. Reload committed workspace.');return;}
@@ -153,7 +155,7 @@ function ActiveWorkspace({ready,message,offline,configured,connect,signout,reloa
     draft.current=next;setState(next);setPending(++pendingCount.current);
     queue.current=queue.current.then(async()=>{
       if(!alive.current||!isCurrent()||failed.current)return;
-      try{row.current=await store.commit(selection.owner,row.current.revision,next);}
+      try{row.current=await store.commit(selection.owner,row.current.revision,next,syncAction);if(alive.current&&isCurrent())setQueued(row.current.sync?.pending.length??0);}
       catch(e){failed.current=true;if(alive.current&&isCurrent())setFailure(e instanceof WorkspaceError?e.code:'Save failed. Export unsaved progress before retrying.');}
     }).finally(()=>{pendingCount.current--;if(alive.current&&isCurrent())setPending(pendingCount.current);});
   },[store,selection.owner,isCurrent]);
@@ -171,7 +173,7 @@ function ActiveWorkspace({ready,message,offline,configured,connect,signout,reloa
   return <>
     <section aria-label="Account and workspace" className="bg-[#FCFBF7] dark:bg-[#141923] text-stone-900 dark:text-white border-b border-stone-300 dark:border-slate-700 px-4 py-3">
       <div className="max-w-6xl mx-auto flex flex-wrap items-center gap-3">
-        <div className="flex-1 min-w-40"><strong>{selection.owner===GUEST?'Guest workspace':selection.email||'THIEPN Account'}</strong><p className="text-xs" role="status">{failure?'Workspace paused':pending?'Saving locally…':'Saved on this device'} · Cloud sync {syncPort.status()}{offline?' · Offline local access':''}</p>{selection.owner===GUEST&&<p className="text-xs">{message}</p>}</div>
+        <div className="flex-1 min-w-40"><strong>{selection.owner===GUEST?'Guest workspace':selection.email||'THIEPN Account'}</strong><p className="text-xs" role="status">{failure?'Workspace paused':pending?'Saving locally…':'Saved on this device'} · Cloud sync {syncPort.status()}{selection.owner!==GUEST&&queued>0?' · '+queued+' local changes queued (not uploaded)':''}{offline?' · Offline local access':''}</p>{selection.owner===GUEST&&<p className="text-xs">{message}</p>}</div>
         {selection.owner===GUEST?<button className={btn} disabled={!configured||pending>0||!!failure} onClick={connect}>{configured?'Continue with THIEPN Account':'Account not configured'}</button>:<>{!offline&&<a className={btn} href="https://account.thiepn.dev/" target="_blank" rel="noreferrer">Manage Account</a>}<button className={btn} disabled={pending>0||!!failure} onClick={signout}>Sign out</button></>}
         <button className={btn} disabled={pending>0} onClick={()=>{if(isCurrent())download(row.current.raw,'bunshou-progress.json');}}>Export saved progress</button>
         {row.current.claimSourceRaw&&<button className={btn} disabled={pending>0} onClick={()=>{if(isCurrent())download(row.current.claimSourceRaw!,'bunshou-claimed-guest-backup.json');}}>Export claimed guest backup</button>}
