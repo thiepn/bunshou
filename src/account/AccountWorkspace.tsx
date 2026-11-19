@@ -1,3 +1,5 @@
+import {progressSummary} from '../interop/progress';
+import {getLocalDateString} from '../utils/srs';
 import {beginAttempt,finishAttempt,failureReceipt,nextDelay,statusText} from '../sync/schedule';
 import {accountFixtureTransport,fixtureEnabled} from '../sync/fixtureAccount';
 import {synchronize,acceptRemote,keepLocal} from '../sync/engine';
@@ -251,6 +253,7 @@ function ActiveWorkspace({ready,message,offline,configured,accountClient,canSync
         {selection.owner===GUEST?<button className={btn} disabled={!configured||pending>0||!!failure} onClick={connect}>{configured?'Continue with THIEPN Account':'Account not configured'}</button>:<>{!offline&&<a className={btn} href="https://account.thiepn.dev/" target="_blank" rel="noreferrer">Manage Account</a>}<button className={btn} disabled={pending>0||!!failure} onClick={signout}>Sign out</button></>}
         {fixture&&<><button className={btn} disabled={syncing||offline||pending>0||!!failure||!!meta?.conflict} onClick={()=>void runSync()}>Sync now (fixture)</button><button className={btn} disabled={syncing||offline||pending>0||!!failure||canClaim} onClick={()=>void toggleAuto()}>{meta?.autoSync?'Disable automatic sync (fixture)':'Enable automatic sync (fixture)'}</button></>}
         <button className={btn} disabled={syncing||pending>0} onClick={()=>{if(isCurrent())download(row.current.raw,'bunshou-progress.json');}}>Export saved progress</button>
+        <button className={btn} disabled={syncing||pending>0||!!failure} onClick={()=>{if(currentRef.current())download(JSON.stringify(progressSummary(decode(row.current.raw),getLocalDateString()),null,2),'bunshou-progress-summary-v1.json');}}>Export ecosystem summary</button>
         {row.current.claimSourceRaw&&<button className={btn} disabled={pending>0} onClick={()=>{if(isCurrent())download(row.current.claimSourceRaw!,'bunshou-claimed-guest-backup.json');}}>Export claimed guest backup</button>}
         {row.current.previousRaw&&<button className={btn} disabled={pending>0} onClick={()=>{if(isCurrent())download(row.current.previousRaw!,'bunshou-previous-progress.json');}}>Export previous state</button>}
       </div>

@@ -1,3 +1,6 @@
+import {EcosystemView} from './components/EcosystemView';
+import {parseFragment} from './interop/contract';
+import {unitExists} from './interop/corpus';
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { ALL_SENTENCES } from './data/sentences';
 import { AppScreen, TopNav } from './components/TopNav';
@@ -29,6 +32,7 @@ import type {Action} from './sync/model';
 export default function App({appState,setAppState}: {appState: PersistedAppState; setAppState: (update:SetStateAction<PersistedAppState>, action?:Action)=>void}) {
   const [undoStack, setUndoStack] = useState<PersistedAppState[]>([]);
 
+  const [incoming,setIncoming]=useState(()=>parseFragment(window.location.hash));
   const [activeScreen, setActiveScreen] = useState<AppScreen>(() => {
     if (typeof window !== 'undefined') {
       const params = new URLSearchParams(window.location.search);
@@ -58,6 +62,22 @@ export default function App({appState,setAppState}: {appState: PersistedAppState
   }>({});
 
 
+  // Public inbound references may navigate only; nothing is written to progress.
+  useEffect(()=>{
+    const navigate=()=>{
+      const hash=window.location.hash;
+      if(!hash.startsWith('#jv='))return;
+      const ref=parseFragment(hash);setIncoming(ref);
+      if(!ref){setActiveScreen('ecosystem');return;}
+      if(ref.kind==='vocabulary'||ref.kind==='kanji'||ref.kind==='sentence'){setActiveScreen('ecosystem');return;}
+      if(ref.kind==='grammar-unit'&&unitExists(ref.id)){setGrammarInitialUnitId(ref.id);setActiveScreen('grammar');return;}
+      if(ref.kind==='lesson'&&unitExists(ref.id)){setStudyLaunchConfig({mode:'learn_new',unitId:ref.id,level:ref.id.startsWith('a11-')?'A1.1':'A1.2'});setActiveScreen('study');return;}
+      if(ref.kind==='review'){setStudyLaunchConfig({mode:'daily_review',level:appState.settings.selectedLevel});setActiveScreen('study');return;}
+      setActiveScreen('ecosystem');
+    };
+    navigate();window.addEventListener('hashchange',navigate);
+    return()=>window.removeEventListener('hashchange',navigate);
+  },[]);
   // Sync light/dark theme class on <html> and update PWA theme-color meta tag
   useEffect(() => {
     if (typeof document !== 'undefined') {
@@ -246,6 +266,7 @@ export default function App({appState,setAppState}: {appState: PersistedAppState
       if (screen === 'library') {
         setLibraryInitialFilter({});
       }
+      if(location.hash.startsWith('#jv=')){history.replaceState(null,'',location.pathname+location.search);setIncoming(null);}
       setActiveScreen(screen);
     },
     [activeScreen, dueCount, appState.settings.selectedLevel]
@@ -310,6 +331,7 @@ export default function App({appState,setAppState}: {appState: PersistedAppState
       />
 
       <main className="flex-1">
+        {activeScreen === 'ecosystem' && <EcosystemView key={JSON.stringify(incoming)} initial={incoming} onPractice={handleStartStudy} onGrammar={handleOpenUnitGrammar}/>}
         {activeScreen === 'home' && (
           <HomeView
             appState={appState}
