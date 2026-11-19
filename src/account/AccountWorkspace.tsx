@@ -21,57 +21,83 @@ export default function AccountWorkspace(){
   const recoveryStore=useRef<WorkspaceStore|null>(null);
   const active=useRef<Ready|null>(null),epoch=useRef(0),identityEpoch=useRef(0),lastIdentity=useRef(''),settled=useRef(false);
   const selectedOwner=useRef<string|null>(null);
+  // Same-document local access only; never an authority for remote requests.
+  const lease=useRef<{owner:string;tokens:string;expires:number}|null>(null);
+  const [offlineMode,setOfflineMode]=useState<'none'|'offer'|'active'|'checking'>('none');
+  const offlineRef=useRef<typeof offlineMode>('none');
+  const mode=useCallback((value:typeof offlineMode)=>{offlineRef.current=value;setOfflineMode(value);},[]);
+  const leaseValid=useCallback(()=>{
+    const v=lease.current;
+    try{return !!v&&v.owner===selectedOwner.current&&Date.now()<v.expires&&localStorage.getItem(SESSION_KEY+':tokens')===v.tokens;}
+    catch{return false;}
+  },[]);
   const select=useCallback((owner:string,email?:string|null)=>{
     recoveryStore.current?.close();recoveryStore.current=null;setRecovering(false);
+    mode('none');
     selectedOwner.current=owner;
     active.current?.store.close();active.current=null;
     const next={owner,email,epoch:++epoch.current};setReady(null);setError(null);setSelection(next);
     try{window.speechSynthesis?.cancel();}catch{}
-  },[]);
-  const lock=useCallback((text:string)=>{recoveryStore.current?.close();recoveryStore.current=null;setRecovering(false);selectedOwner.current=null;active.current?.store.close();active.current=null;++epoch.current;setReady(null);setSelection(null);setError(null);setMessage(text);try{window.speechSynthesis?.cancel();}catch{}},[]);
+  },[mode]);
+  const lock=useCallback((text:string)=>{lease.current=null;mode('none');recoveryStore.current?.close();recoveryStore.current=null;setRecovering(false);selectedOwner.current=null;active.current?.store.close();active.current=null;++epoch.current;setReady(null);setSelection(null);setError(null);setMessage(text);try{window.speechSynthesis?.cancel();}catch{}},[mode]);
   useEffect(()=>{
     const client=account.client;let disposed=false;let running=false;let queued=false;
     if(!client){select(GUEST);setMessage(account.error||'Account connection not configured');return;}
     const publish=async(identity:Identity)=>{
-      if(disposed)return;
+      if(disposed||(!navigator.onLine&&identity.status!=='signed-out'))return;
       const token=++identityEpoch.current;
-      if(identity.status==='signed-out'){lastIdentity.current='signed-out';if(selectedOwner.current!==GUEST)select(GUEST);setMessage('Guest workspace');return;}
+      if(identity.status==='signed-out'){lease.current=null;mode('none');lastIdentity.current='signed-out';if(selectedOwner.current!==GUEST)select(GUEST);setMessage('Guest workspace');return;}
       if(identity.status!=='signed-in'){lastIdentity.current='unavailable';lock('Account unavailable. Retry or use the separate guest workspace.');return;}
       const key='account:'+identity.id;
       if(lastIdentity.current!==key){lock('Verifying Account connection…');lastIdentity.current=key;}
       try{
         const checked=await client.verifyConnection(identity);
         if(disposed||token!==identityEpoch.current)return;
-        if(checked.status==='signed-in'&&checked.id===identity.id){if(selectedOwner.current!==checked.id)select(checked.id,checked.email);setMessage('Account connected');}
+        if(checked.status==='signed-in'&&checked.id===identity.id){
+          const stored=localStorage.getItem(SESSION_KEY+':tokens');
+          if(!stored||!navigator.onLine){lock('Account session changed. Retry verification.');return;}
+          if(selectedOwner.current!==checked.id)select(checked.id,checked.email);
+          lease.current={owner:checked.id,tokens:stored,expires:Date.now()+30*60*1000};
+          mode('none');setMessage('Account connected');
+        }
         else{lastIdentity.current='unavailable';lock('Account connection unavailable. Reconnect or continue as guest.');}
       }catch{if(!disposed&&token===identityEpoch.current){lastIdentity.current='unavailable';lock('Account verification failed. Retry or use guest.');}}
     };
-    const recheck=async()=>{if(disposed)return;if(running){queued=true;return;}running=true;const started=identityEpoch.current;try{const result=await client.sso.verify();if(!disposed&&started===identityEpoch.current)await publish(result);}catch{if(!disposed&&started===identityEpoch.current)lock('Account verification unavailable.');}finally{running=false;if(queued){queued=false;void recheck();}}};
+    const recheck=async()=>{if(disposed||!navigator.onLine)return;if(running){queued=true;return;}running=true;const started=identityEpoch.current;try{const result=await client.sso.verify();if(!disposed&&started===identityEpoch.current)await publish(result);}catch{if(!disposed&&started===identityEpoch.current)lock('Account verification unavailable.');}finally{running=false;if(queued){queued=false;void recheck();}}};
     // SDK verification publishes identities itself. Only react to owner/auth changes, not the
     // recursive verification of the same identity inside checkConnection.
     const unsubscribe=client.sso.subscribe(identity=>{
-      if(disposed||!settled.current)return;
+      if(disposed||!settled.current||(!navigator.onLine&&identity.status!=='signed-out'))return;
       const key=identity.status==='signed-in'?'account:'+identity.id:identity.status;
       if(key!==lastIdentity.current)void publish(identity);
     });
     const start=async()=>{
+      const started=identityEpoch.current;
       try{
         const url=new URL(location.href),callback=new URL(CALLBACK);
         let identity:Identity;
         if(url.origin===callback.origin&&url.pathname===callback.pathname){
           try{identity=await client.sso.completeCallback(location);}finally{history.replaceState(null,'',new URL('../..',callback).pathname);}
-        }else{const result=await client.sso.initialize();if(result.status==='redirecting'){setMessage('Opening THIEPN Account…');return;}identity=result.identity;}
-        if(!disposed){settled.current=true;await publish(identity);}
-      }catch{if(!disposed){settled.current=true;lock('Account initialization failed. Retry or use guest.');}}
+        }else{const result=await client.sso.initialize();if(result.status==='redirecting'){if(!disposed&&started===identityEpoch.current)setMessage('Opening THIEPN Account…');return;}identity=result.identity;}
+        if(!disposed){settled.current=true;if(started===identityEpoch.current){if(!navigator.onLine&&identity.status!=='signed-out')lock('Offline startup: verify your Account online, or continue as guest.');else await publish(identity);}}
+      }catch{if(!disposed){settled.current=true;if(started===identityEpoch.current)lock('Account initialization failed. Retry or use guest.');}}
     };
     void start();
-    const storage=(e:StorageEvent)=>{if(e.key===null||e.key.startsWith(SESSION_KEY)){++identityEpoch.current;lastIdentity.current='';lock('Checking changed Account session…');void recheck();}};
-    const offline=()=>{if(active.current?.selection.owner!==GUEST){++identityEpoch.current;lastIdentity.current='unavailable';lock('Offline. Account workspace locked; guest learning remains available.');}};
-    const focus=()=>{if(settled.current)void recheck();};
-    window.addEventListener('storage',storage);window.addEventListener('focus',focus);window.addEventListener('online',focus);window.addEventListener('offline',offline);
-    const interval=setInterval(()=>{if(settled.current&&navigator.onLine)void recheck();},60000);
-    return()=>{disposed=true;unsubscribe();clearInterval(interval);window.removeEventListener('storage',storage);window.removeEventListener('focus',focus);window.removeEventListener('online',focus);window.removeEventListener('offline',offline);};
-  },[account,select,lock]);
+    const storage=(e:StorageEvent)=>{if(e.key===null||e.key.startsWith(SESSION_KEY)||e.key==='thiepn:sso:'+client.sso.clientId+':manual-signout'){++identityEpoch.current;lastIdentity.current='';lock('Checking changed Account session…');void recheck();}};
+    const offline=()=>{
+      if(selectedOwner.current===GUEST)return;
+      ++identityEpoch.current;
+      if(active.current&&leaseValid()){
+        mode('offer');setMessage('Connection lost. Continue locally only with this previously verified Account.');
+        try{window.speechSynthesis?.cancel();}catch{}
+      }else lock('Offline. Account workspace locked; guest learning remains available.');
+    };
+    const online=()=>{if(offlineRef.current!=='none'){mode('checking');setMessage('Rechecking Account before resuming…');}if(settled.current)void recheck();};
+    const focus=()=>{if(navigator.onLine)online();else if(offlineRef.current!=='none'&&!leaseValid())lock('Offline access expired. Reconnect or continue as guest.');};
+    window.addEventListener('storage',storage);window.addEventListener('focus',focus);window.addEventListener('online',online);window.addEventListener('offline',offline);
+    const interval=setInterval(()=>{if(settled.current&&navigator.onLine)void recheck();else if(offlineRef.current!=='none'&&!leaseValid())lock('Offline access expired. Reconnect or continue as guest.');},30000);
+    return()=>{disposed=true;unsubscribe();clearInterval(interval);window.removeEventListener('storage',storage);window.removeEventListener('focus',focus);window.removeEventListener('online',online);window.removeEventListener('offline',offline);};
+  },[account,select,lock,mode,leaseValid]);
   useEffect(()=>{
     if(!selection)return;
     let cancelled=false;let store:WorkspaceStore|undefined;
@@ -106,9 +132,14 @@ export default function AccountWorkspace(){
     finally{store?.close();if(recoveryStore.current===store)recoveryStore.current=null;if(current())setRecovering(false);}
   };
   if(!ready)return <main className="max-w-xl mx-auto p-8 space-y-4"><h1 className="text-xl font-bold">Bunshō workspace</h1><p role="status">{error?error.code:message}</p>{error&&<p role="status">{message}</p>}{error?.raw!==undefined&&<button className={btn} onClick={()=>download(error.raw!,'bunshou-original-recovery.json')}>Export original bytes</button>}{error?.recoveryRaw!==undefined&&<button className={btn} onClick={()=>download(error.recoveryRaw!,'bunshou-recovery.json')}>Export recovery copy</button>}{error&&['LEGACY_RECOVERY_REQUIRED','RECOVERY_REQUIRED'].includes(error.code)&&<div className="space-y-2">{error.recoveryRaw!==undefined&&<button className={btn} disabled={recovering} onClick={()=>void recover(error.recoveryRaw!)}>Restore validated recovery copy</button>}<label className="block">Restore a backup file<input aria-label="Recovery backup file" type="file" accept="application/json,.json" disabled={recovering} onChange={e=>{const file=e.currentTarget.files?.[0];if(file){const captured=selection?.epoch;void file.text().then(raw=>{if(captured===epoch.current)void recover(raw);}).catch(()=>setMessage('Could not read recovery file.'));}}}/></label></div>}<div className="flex flex-wrap gap-2"><button className={btn} disabled={recovering} onClick={retry}>Retry</button>{account.client&&<button className={btn} onClick={connect}>Continue with THIEPN Account</button>}<button className={btn} onClick={guest}>Continue as guest</button></div></main>;
-  return <ActiveWorkspace key={ready.selection.epoch} ready={ready} message={message} configured={!!account.client} connect={connect} signout={signout} reload={()=>select(ready.selection.owner,ready.selection.email)} isCurrent={()=>active.current===ready&&ready.selection.epoch===epoch.current}/>;
+  return <>
+    {(offlineMode==='offer'||offlineMode==='checking')&&<main className="max-w-xl mx-auto p-8 space-y-4"><h1 className="text-xl font-bold">Account workspace paused</h1><p role="status">{message}</p>{offlineMode==='offer'&&<><p>Only this open document may continue for up to 30 minutes after online verification. No cloud requests or guest migration are available offline.</p><button className={btn} onClick={()=>{if(leaseValid()&&!navigator.onLine)mode('active');else lock('Offline access unavailable. Reconnect or continue as guest.');}}>Continue offline locally</button></>}<button className={btn} onClick={guest}>Continue as guest</button></main>}
+    <div hidden={offlineMode==='offer'||offlineMode==='checking'} inert={offlineMode==='offer'||offlineMode==='checking'}>
+      <ActiveWorkspace key={ready.selection.epoch} ready={ready} message={message} offline={offlineMode!=='none'} configured={!!account.client} connect={connect} signout={signout} reload={()=>{if(!navigator.onLine&&ready.selection.owner!==GUEST){lock('Reconnect before reopening the Account workspace.');return;}select(ready.selection.owner,ready.selection.email);}} isCurrent={()=>active.current===ready&&ready.selection.epoch===epoch.current&&(navigator.onLine||ready.selection.owner===GUEST||leaseValid())}/>
+    </div>
+  </>;
 }
-function ActiveWorkspace({ready,message,configured,connect,signout,reload,isCurrent}:{ready:Ready;message:string;configured:boolean;connect:()=>void;signout:()=>void;reload:()=>void;isCurrent:()=>boolean}){
+function ActiveWorkspace({ready,message,offline,configured,connect,signout,reload,isCurrent}:{ready:Ready;message:string;offline:boolean;configured:boolean;connect:()=>void;signout:()=>void;reload:()=>void;isCurrent:()=>boolean}){
   const {store,selection}=ready;
   const row=useRef(ready.row),draft=useRef(decode(ready.row.raw)),alive=useRef(true),failed=useRef(false),queue=useRef(Promise.resolve()),pendingCount=useRef(0);
   const claiming=useRef(false);
@@ -129,19 +160,19 @@ function ActiveWorkspace({ready,message,configured,connect,signout,reload,isCurr
   // App's existing callbacks have stable closures. Fence every write with the live owner.
   const [stableUpdate]=useState(()=>update);
   const claim=async()=>{
-    if(!ready.guest||pendingCount.current||!isCurrent()||failed.current)return;
+    if(offline||!navigator.onLine||!ready.guest||pendingCount.current||!isCurrent()||failed.current)return;
     if(!window.confirm('Move this device’s guest progress to this Account? A recovery snapshot will be retained inside this Account workspace.'))return;
     claiming.current=true;setPending(++pendingCount.current);
     try{await store.claimGuest(selection.owner,ready.guest.revision,row.current.revision,isCurrent);if(isCurrent())reload();}
     catch(e){if(isCurrent())setFailure(e instanceof WorkspaceError?e.code:'Guest claim failed');}
     finally{claiming.current=false;pendingCount.current--;if(isCurrent())setPending(pendingCount.current);}
   };
-  const canClaim=selection.owner!==GUEST&&row.current.revision===0&&!!ready.guest&&ready.guest.revision>0&&ready.guest.raw!==encode(createInitialAppState());
+  const canClaim=!offline&&selection.owner!==GUEST&&row.current.revision===0&&!!ready.guest&&ready.guest.revision>0&&ready.guest.raw!==encode(createInitialAppState());
   return <>
     <section aria-label="Account and workspace" className="bg-[#FCFBF7] dark:bg-[#141923] text-stone-900 dark:text-white border-b border-stone-300 dark:border-slate-700 px-4 py-3">
       <div className="max-w-6xl mx-auto flex flex-wrap items-center gap-3">
-        <div className="flex-1 min-w-40"><strong>{selection.owner===GUEST?'Guest workspace':selection.email||'THIEPN Account'}</strong><p className="text-xs" role="status">{failure?'Workspace paused':pending?'Saving locally…':'Saved on this device'} · Cloud sync {syncPort.status()}</p>{selection.owner===GUEST&&<p className="text-xs">{message}</p>}</div>
-        {selection.owner===GUEST?<button className={btn} disabled={!configured||pending>0||!!failure} onClick={connect}>{configured?'Continue with THIEPN Account':'Account not configured'}</button>:<><a className={btn} href="https://account.thiepn.dev/" target="_blank" rel="noreferrer">Manage Account</a><button className={btn} disabled={pending>0||!!failure} onClick={signout}>Sign out</button></>}
+        <div className="flex-1 min-w-40"><strong>{selection.owner===GUEST?'Guest workspace':selection.email||'THIEPN Account'}</strong><p className="text-xs" role="status">{failure?'Workspace paused':pending?'Saving locally…':'Saved on this device'} · Cloud sync {syncPort.status()}{offline?' · Offline local access':''}</p>{selection.owner===GUEST&&<p className="text-xs">{message}</p>}</div>
+        {selection.owner===GUEST?<button className={btn} disabled={!configured||pending>0||!!failure} onClick={connect}>{configured?'Continue with THIEPN Account':'Account not configured'}</button>:<>{!offline&&<a className={btn} href="https://account.thiepn.dev/" target="_blank" rel="noreferrer">Manage Account</a>}<button className={btn} disabled={pending>0||!!failure} onClick={signout}>Sign out</button></>}
         <button className={btn} disabled={pending>0} onClick={()=>{if(isCurrent())download(row.current.raw,'bunshou-progress.json');}}>Export saved progress</button>
         {row.current.claimSourceRaw&&<button className={btn} disabled={pending>0} onClick={()=>{if(isCurrent())download(row.current.claimSourceRaw!,'bunshou-claimed-guest-backup.json');}}>Export claimed guest backup</button>}
         {row.current.previousRaw&&<button className={btn} disabled={pending>0} onClick={()=>{if(isCurrent())download(row.current.previousRaw!,'bunshou-previous-progress.json');}}>Export previous state</button>}

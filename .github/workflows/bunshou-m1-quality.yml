@@ -31,3 +31,12 @@ jobs:
             sleep 1
           done
           node tests/m1-workspace.browser.mjs
+      - name: Build disposable Account fixture (not deployed)
+        env:
+          VITE_BUNSHOU_ACCOUNT_ENABLED: 'true'
+          VITE_BUNSHOU_ACCOUNT_ISSUER: https://hycegznamzjhwinegaai.supabase.co
+          VITE_BUNSHOU_ACCOUNT_PUBLISHABLE_KEY: disposable-fixture-key-not-a-real-key
+          VITE_BUNSHOU_OAUTH_CLIENT_ID: 33333333-3333-4333-8333-333333333333
+          VITE_BUNSHOU_CALLBACK_URL: https://japanese.thiepn.dev/bunshou/auth/callback/
+        run: npm run build -- --outDir dist-m1-fixture
+      - run: node tests/m1-account.browser.mjs
