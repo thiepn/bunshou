@@ -1,6 +1,6 @@
 import React from 'react';
 import { createRoot } from 'react-dom/client';
-import App from './App.tsx';
+import AccountWorkspace from './account/AccountWorkspace';
 import './index.css';
 
 interface ErrorBoundaryState {
@@ -52,17 +52,9 @@ class RootErrorBoundary extends React.Component<
 if (typeof window !== 'undefined' && 'serviceWorker' in navigator) {
   window.addEventListener('load', () => {
     try {
-      if (import.meta.env.DEV) {
-        navigator.serviceWorker
-          .getRegistrations()
-          .then((registrations) => {
-            for (const reg of registrations) {
-              reg.unregister().catch(() => {});
-            }
-          })
-          .catch(() => {});
-      } else if (import.meta.env.PROD) {
-        navigator.serviceWorker.register('/sw.js', { scope: '/' }).catch(() => {});
+      if (import.meta.env.PROD) {
+        const base = import.meta.env.BASE_URL;
+        navigator.serviceWorker.register(base+'sw.js',{scope:base}).catch(()=>{});
       }
     } catch {
       // Ignore sandboxed iframe serviceWorker restrictions
@@ -72,6 +64,6 @@ if (typeof window !== 'undefined' && 'serviceWorker' in navigator) {
 
 createRoot(document.getElementById('root')!).render(
   <RootErrorBoundary>
-    <App />
+    <AccountWorkspace />
   </RootErrorBoundary>
 );

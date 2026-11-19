@@ -100,10 +100,11 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
       return;
     }
 
+    if (!window.confirm('Replace progress in this workspace with this backup? The previous state will be retained for recovery.')) return;
     onImportState(result.state);
     setImportFeedback({
       type: 'success',
-      message: `Successfully restored ${result.importedRecordCount} studied sentence records and ${result.importedFavoriteCount} favorites.`,
+      message: `Backup accepted for saving. Check the workspace save status above.`,
     });
   };
 

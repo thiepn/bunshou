@@ -37,7 +37,7 @@ interface ProgressViewProps {
 
 type ProgressTabId = 'overview' | 'forecast' | 'seals';
 
-const GOSHUINCHO_HERO_IMAGE = '/src/assets/images/goshuincho_temple_scroll_1794960348857.jpg';
+const GOSHUINCHO_HERO_IMAGE = '/bunshou/src/assets/images/goshuincho_temple_scroll_1794960348857.jpg';
 
 export const ProgressView: React.FC<ProgressViewProps> = ({
   appState,

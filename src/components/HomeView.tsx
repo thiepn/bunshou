@@ -56,7 +56,7 @@ interface HomeViewProps {
   onSaveOmikujiDraw?: (proverbId: string, dateStr: string) => void;
 }
 
-const KYOTO_HERO_IMAGE = '/src/assets/images/kyoto_study_pavilion_hero_1794960349061.jpg';
+const KYOTO_HERO_IMAGE = '/bunshou/src/assets/images/kyoto_study_pavilion_hero_1794960349061.jpg';
 
 export const HomeView: React.FC<HomeViewProps> = ({
   appState,

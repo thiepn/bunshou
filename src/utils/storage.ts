@@ -1,4 +1,5 @@
 import { SENTENCES_BY_ID } from '../data/sentences';
+import { retainsOriginalData } from './storageGuard';
 import {
   DailyActivityLog,
   LearnerSettings,
@@ -7,7 +8,7 @@ import {
   SentenceReviewRecord,
 } from '../types/curriculum';
 
-const STORAGE_KEY = 'bunsho_app_state_v1';
+export const STORAGE_KEY = 'bunsho_app_state_v1';
 
 export const DEFAULT_SETTINGS: LearnerSettings = {
   furiganaMode: 'always_on',
@@ -37,44 +38,6 @@ export function createInitialAppState(): PersistedAppState {
   };
 }
 
-export function loadPersistedState(): PersistedAppState {
-  if (typeof window === 'undefined') {
-    return createInitialAppState();
-  }
-  try {
-    const raw = window.localStorage.getItem(STORAGE_KEY);
-    if (!raw) {
-      return createInitialAppState();
-    }
-    const parsed = JSON.parse(raw);
-    const validated = validateAndNormalizeStateObject(parsed);
-    return validated.valid && validated.state ? validated.state : createInitialAppState();
-  } catch {
-    return createInitialAppState();
-  }
-}
-
-export function savePersistedState(state: PersistedAppState): void {
-  if (typeof window === 'undefined') return;
-  try {
-    window.localStorage.setItem(STORAGE_KEY, JSON.stringify(state));
-  } catch (err) {
-    console.warn('Failed to save learning state to localStorage:', err);
-  }
-}
-
-export function clearPersistedState(): PersistedAppState {
-  const fresh = createInitialAppState();
-  if (typeof window !== 'undefined') {
-    try {
-      window.localStorage.setItem(STORAGE_KEY, JSON.stringify(fresh));
-    } catch {
-      // ignore
-    }
-  }
-  return fresh;
-}
-
 const VALID_GRADES = new Set<ReviewGrade>(['again', 'hard', 'good', 'easy']);
 
 export function validateAndNormalizeStateObject(input: unknown): {
@@ -90,7 +53,7 @@ export function validateAndNormalizeStateObject(input: unknown): {
 
   const obj = input as Record<string, unknown>;
 
-  if (typeof obj.version !== 'number' || obj.version < 1) {
+  if (obj.version !== 1) {
     return { valid: false, error: 'Missing or unsupported backup version number.' };
   }
 
@@ -98,6 +61,18 @@ export function validateAndNormalizeStateObject(input: unknown): {
     return { valid: false, error: 'Backup is missing a valid "records" dictionary.' };
   }
 
+  if (obj.settings !== undefined && (!obj.settings || typeof obj.settings !== 'object' || Array.isArray(obj.settings))) {
+    return { valid: false, error: 'Invalid settings object; original data preserved.' };
+  }
+  if (obj.favorites !== undefined && !Array.isArray(obj.favorites)) {
+    return { valid: false, error: 'Invalid favorites array; original data preserved.' };
+  }
+  if (obj.dailyLogs !== undefined && (!obj.dailyLogs || typeof obj.dailyLogs !== 'object' || Array.isArray(obj.dailyLogs))) {
+    return { valid: false, error: 'Invalid daily logs; original data preserved.' };
+  }
+  if (obj.completedDialogues !== undefined && !Array.isArray(obj.completedDialogues)) {
+    return { valid: false, error: 'Invalid completed dialogues; original data preserved.' };
+  }
   const normalizedSettings: LearnerSettings = { ...DEFAULT_SETTINGS };
   if (obj.settings && typeof obj.settings === 'object' && !Array.isArray(obj.settings)) {
     const s = obj.settings as Record<string, unknown>;
@@ -156,28 +131,44 @@ export function validateAndNormalizeStateObject(input: unknown): {
   let importedRecordCount = 0;
 
   for (const [sentenceId, recVal] of Object.entries(rawRecords)) {
-    if (!SENTENCES_BY_ID[sentenceId]) {
-      continue;
+    if (!Object.prototype.hasOwnProperty.call(SENTENCES_BY_ID, sentenceId)) {
+      return { valid: false, error: `Unknown sentence ID: ${sentenceId}. The original backup has not been altered.` };
     }
     if (!recVal || typeof recVal !== 'object' || Array.isArray(recVal)) {
       return { valid: false, error: `Invalid review record format for ${sentenceId}.` };
     }
     const r = recVal as Record<string, unknown>;
     if (
-      typeof r.repetitions !== 'number' ||
-      typeof r.intervalDays !== 'number' ||
-      typeof r.easeFactor !== 'number' ||
+      typeof r.repetitions !== 'number' || !Number.isFinite(r.repetitions) ||
+      typeof r.intervalDays !== 'number' || !Number.isFinite(r.intervalDays) ||
+      typeof r.easeFactor !== 'number' || !Number.isFinite(r.easeFactor) ||
       typeof r.dueDate !== 'string' ||
       typeof r.lastReviewedDate !== 'string' ||
       typeof r.firstStudiedDate !== 'string' ||
-      typeof r.totalReviews !== 'number' ||
-      typeof r.lapses !== 'number' ||
+      typeof r.totalReviews !== 'number' || !Number.isFinite(r.totalReviews) ||
+      typeof r.lapses !== 'number' || !Number.isFinite(r.lapses) ||
       typeof r.lastGrade !== 'string' ||
       !VALID_GRADES.has(r.lastGrade as ReviewGrade)
     ) {
       return { valid: false, error: `Corrupted fields in review record ${sentenceId}.` };
     }
 
+    if (
+      (r.repetitions as number) < 0 || (r.intervalDays as number) < 0 || (r.totalReviews as number) < 1 || (r.lapses as number) < 0 ||
+      !/^\d{4}-\d{2}-\d{2}$/.test(r.dueDate as string) ||
+      !/^\d{4}-\d{2}-\d{2}$/.test(r.lastReviewedDate as string) ||
+      !/^\d{4}-\d{2}-\d{2}$/.test(r.firstStudiedDate as string) ||
+      (r.gradeHistory !== undefined &&
+       (!Array.isArray(r.gradeHistory) || r.gradeHistory.length > 30 ||
+       !r.gradeHistory.every((entry: unknown) =>
+        Boolean(entry) && typeof entry === 'object' &&
+        /^\d{4}-\d{2}-\d{2}$/.test((entry as { date?: string }).date || '') &&
+        VALID_GRADES.has((entry as { grade?: ReviewGrade }).grade as ReviewGrade) &&
+        Number.isFinite((entry as { intervalDays?: number }).intervalDays)
+       )))
+    ) {
+      return { valid: false, error: `Invalid review history or values for ${sentenceId}.` };
+    }
     normalizedRecords[sentenceId] = {
       sentenceId,
       repetitions: Math.max(0, Math.floor(r.repetitions)),
@@ -197,9 +188,10 @@ export function validateAndNormalizeStateObject(input: unknown): {
   const normalizedFavorites: string[] = [];
   if (Array.isArray(obj.favorites)) {
     for (const favId of obj.favorites) {
-      if (typeof favId === 'string' && SENTENCES_BY_ID[favId] && !normalizedFavorites.includes(favId)) {
-        normalizedFavorites.push(favId);
+      if (typeof favId !== 'string' || !Object.prototype.hasOwnProperty.call(SENTENCES_BY_ID, favId)) {
+        return { valid: false, error: `Unsupported favorite sentence reference: ${String(favId)}` };
       }
+      if (!normalizedFavorites.includes(favId)) normalizedFavorites.push(favId);
     }
   }
 
@@ -216,10 +208,14 @@ export function validateAndNormalizeStateObject(input: unknown): {
   if (obj.dailyLogs && typeof obj.dailyLogs === 'object' && !Array.isArray(obj.dailyLogs)) {
     for (const [dateKey, logVal] of Object.entries(obj.dailyLogs as Record<string, unknown>)) {
       if (!/^\d{4}-\d{2}-\d{2}$/.test(dateKey) || !logVal || typeof logVal !== 'object') {
-        continue;
+        return { valid: false, error: `Invalid daily log: ${dateKey}` };
       }
       const l = logVal as Record<string, unknown>;
       const g = (l.grades && typeof l.grades === 'object' ? l.grades : {}) as Record<string, unknown>;
+      const counts: unknown[] = [l.newStudiedCount, l.reviewsCompletedCount, l.practiceCount, g.again, g.hard, g.good, g.easy];
+      if (counts.some((n) => n !== undefined && (!Number.isFinite(n) || (n as number) < 0))) {
+        return { valid: false, error: `Invalid daily log counts for ${dateKey}` };
+      }
       normalizedLogs[dateKey] = {
         date: dateKey,
         newStudiedCount: typeof l.newStudiedCount === 'number' ? Math.max(0, l.newStudiedCount) : 0,
@@ -258,7 +254,11 @@ export function validateAndNormalizeStateObject(input: unknown): {
 export function validateAndParseBackupJson(rawText: string) {
   try {
     const parsed = JSON.parse(rawText);
-    return validateAndNormalizeStateObject(parsed);
+    const result = validateAndNormalizeStateObject(parsed);
+    if (result.valid && result.state && !retainsOriginalData(parsed, result.state)) {
+      return { valid: false, error: 'Backup contains fields that would be discarded or changed. The original backup remains unchanged.' };
+    }
+    return result;
   } catch {
     return {
       valid: false,
