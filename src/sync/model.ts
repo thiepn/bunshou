@@ -12,7 +12,7 @@ export type Document={raw:string;generation:number;reviews:ReviewEvent[]};
 export type Remote={revision:number;document:Document|null};
 export type Mutation={mutation_id:string;primitive:'document';resource_type:typeof RESOURCE;resource_id:typeof RESOURCE_ID;operation:'upsert';base_revision:number;schema_version:1;data:Document};
 export type Conflict={reason:string;localRaw:string;remote:Remote;pending:LocalChange[]};
-export type SyncMeta={deviceId:string;remote:Remote;cursor:string|null;pending:LocalChange[];flight?:{mutation:Mutation;included:string[]};conflict?:Conflict};
+export type SyncMeta={deviceId:string;remote:Remote;cursor:string|null;pending:LocalChange[];flight?:{mutation:Mutation;included:string[]};conflict?:Conflict;archives?:Conflict[]};
 export const emptyRaw=()=>JSON.stringify(createInitialAppState());
 export function state(raw:string):PersistedAppState{const r=validateAndParseBackupJson(raw);if(!r.valid||!r.state)throw Error('SYNC_INVALID_STATE');return r.state;}
 export function canonical(v:unknown):string{
@@ -44,7 +44,7 @@ export function unionReviews(a:ReviewEvent[],b:ReviewEvent[]):ReviewEvent[]{
  return [...events.values()].sort((x,y)=>x.event_id.localeCompare(y.event_id));
 }
 function validateEvent(e:ReviewEvent){
- if(!e||typeof e.event_id!=='string'||!/^[-0-9a-f]{36}$/i.test(e.event_id)||e.event_type!=='review.completed'||e.schema_version!==1||!Number.isFinite(Date.parse(e.occurred_at))||e.data?.kind!=='review'||!Object.hasOwn(SENTENCES_BY_ID,e.data.sentenceId)||!['again','hard','good','easy'].includes(e.data.grade)||!/^\d{4}-\d{2}-\d{2}$/.test(e.data.date)||typeof e.data.isNew!=='boolean')throw Error('SYNC_INVALID_REVIEW');
+ if(!e||typeof e.event_id!=='string'||!/^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(e.event_id)||e.event_type!=='review.completed'||e.schema_version!==1||!Number.isFinite(Date.parse(e.occurred_at))||e.data?.kind!=='review'||!Object.hasOwn(SENTENCES_BY_ID,e.data.sentenceId)||!['again','hard','good','easy'].includes(e.data.grade)||!/^\d{4}-\d{2}-\d{2}$/.test(e.data.date)||typeof e.data.isNew!=='boolean')throw Error('SYNC_INVALID_REVIEW');
 }
 export function validateDocument(d:Document){
  if(!d||typeof d.raw!=='string'||!Number.isSafeInteger(d.generation)||d.generation<0||!Array.isArray(d.reviews)||d.reviews.length>100000)throw Error('SYNC_INVALID_DOCUMENT');
@@ -55,6 +55,7 @@ export function remoteRaw(remote:Remote){return remote.document?.raw??emptyRaw()
 export function buildMutation(raw:string,m:SyncMeta):Mutation{
  const previous=m.remote.document;
  const replacement=m.pending.some(x=>x.action.kind==='replace');
+ if(m.remote.revision>0&&!previous&&!replacement)throw Error('SYNC_EXPLICIT_RESTORE_REQUIRED');
  const data=validateDocument({raw,generation:(previous?.generation??0)+Number(replacement),reviews:unionReviews(previous?.reviews??[],m.pending.flatMap(x=>x.event?[x.event]:[]))});
  return {mutation_id:uuid(),primitive:'document',resource_type:RESOURCE,resource_id:RESOURCE_ID,operation:'upsert',base_revision:m.remote.revision,schema_version:1,data};
 }
@@ -70,6 +71,10 @@ export function mergeRaw(base:string,local:string,remote:string):string|null{
  };
  const set=(x:string[],y:string[],z:string[])=>[...new Set([...x,...y,...z])].filter(k=>pick(x.includes(k),y.includes(k),z.includes(k))).sort();
  try{
+  // Even identical independently changed counts/records can represent two actual
+  // reviews. Do not deduplicate their logical effects by comparing snapshots.
+  const overlap=(x:Record<string,unknown>,y:Record<string,unknown>,z:Record<string,unknown>)=>[...new Set([...Object.keys(x),...Object.keys(y),...Object.keys(z)])].some(k=>!same(x[k],y[k])&&!same(x[k],z[k]));
+  if(overlap(b.records,l.records,r.records)||overlap(b.dailyLogs,l.dailyLogs,r.dailyLogs))return null;
   const logs=map(b.dailyLogs,l.dailyLogs,r.dailyLogs);
   const merged={version:1,settings:map(b.settings as unknown as Record<string,unknown>,l.settings as unknown as Record<string,unknown>,r.settings as unknown as Record<string,unknown>),records:map(b.records,l.records,r.records),dailyLogs:logs,favorites:set(b.favorites,l.favorites,r.favorites),completedDialogues:set(b.completedDialogues??[],l.completedDialogues??[],r.completedDialogues??[]),lastOmikujiDate:pick(b.lastOmikujiDate,l.lastOmikujiDate,r.lastOmikujiDate),lastOmikujiId:pick(b.lastOmikujiId,l.lastOmikujiId,r.lastOmikujiId)};
   const raw=JSON.stringify(merged);state(raw);return raw;
@@ -80,8 +85,9 @@ export function reconcile(localRaw:string,m:SyncMeta,remote:Remote):{raw:string;
  if(remote.revision<m.remote.revision)throw Error('SYNC_REVISION_ROLLBACK');
  if(remote.document)validateDocument(remote.document);
  const dirty=m.pending.length>0;
+ if(remote.document&&m.remote.document){const next=new Map(remote.document.reviews.map(e=>[e.event_id,e]));for(const e of m.remote.document.reviews)if(!same(next.get(e.event_id),e))throw Error('SYNC_REVIEW_HISTORY_REMOVED');}
  if(!dirty)return {raw:remoteRaw(remote),meta:{...m,remote,conflict:undefined}};
- const barrier=m.pending.some(x=>x.action.kind==='replace'||x.action.kind==='undo');
+ const barrier=m.pending.some(x=>x.action.kind==='replace'||x.action.kind==='undo')||!!m.conflict;
  const deleted=remote.document===null||((m.remote.document?.generation??0)!==remote.document.generation);
  const merged=!barrier&&!deleted?mergeRaw(remoteRaw(m.remote),localRaw,remoteRaw(remote)):null;
  if(merged===null)return {raw:localRaw,meta:{...m,conflict:{reason:deleted?'REMOTE_REPLACEMENT_OR_DELETION':barrier?'LOCAL_REPLACEMENT_OR_UNDO':'OVERLAPPING_PROGRESS',localRaw,remote,pending:m.pending}}};
