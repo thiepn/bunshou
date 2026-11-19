@@ -6,10 +6,16 @@ for(const engine of [chromium,firefox,webkit]){
  const browser=await engine.launch();
  try{
   const context=await browser.newContext({acceptDownloads:true});
+  // This disposable functional suite must not wait on public font services.
+  // Keep local Vite resources and the intercepted canonical partner navigation.
+  await context.route('https://fonts.googleapis.com/**',route=>route.fulfill({status:200,contentType:'text/css',body:''}));
+  await context.route('https://fonts.gstatic.com/**',route=>route.abort());
+
   const page=await context.newPage();
   const diagnostics=[];
   page.on('pageerror',e=>diagnostics.push('pageerror: '+e.message));
   page.on('console',m=>{if(m.type()==='error')diagnostics.push('console: '+m.text());});
+  page.on('requestfailed',r=>diagnostics.push('requestfailed: '+new URL(r.url()).origin+new URL(r.url()).pathname+' '+(r.failure()?.errorText??'')));
   page.on('response',r=>{if(r.status()>=400&&r.url().startsWith(base))diagnostics.push('HTTP '+r.status()+' '+new URL(r.url()).pathname);});
   // Serve the exact fixture bytes rather than treating a test-only HTML document
   // as a second Vite HTML entry (which may rewrite its base-prefixed imports).
@@ -27,7 +33,7 @@ for(const engine of [chromium,firefox,webkit]){
    return route.fulfill({status:200,contentType:'text/html',body:'<script>location.replace('+JSON.stringify(target+(u.pathname==='/bunshou/'?'':'?partner='+pageKind))+'+location.hash)</script>'});
   });
   const ref='#jv=1&kind=vocabulary&text='+encodeURIComponent('学生');
-  await page.goto(base+ref);
+  await page.goto(base+ref,{waitUntil:'domcontentloaded'});
   await page.getByRole('heading',{name:'Context & Japanese ecosystem'}).waitFor();
   await page.getByText('Look up 学生 in Kotoba',{exact:true}).waitFor();
   const href=await page.getByRole('link',{name:'Look up 学生 in Kotoba'}).getAttribute('href');
@@ -40,7 +46,7 @@ for(const engine of [chromium,firefox,webkit]){
   await page.getByRole('link',{name:'Find example sentences in Bunshō'}).click();
   await page.getByRole('heading',{name:'Context & Japanese ecosystem'}).waitFor();
   await page.getByText('Look up 学生 in Kotoba',{exact:true}).waitFor();
-  await page.goto(base+'#jv=1&kind=sentence&id=a11-u01-01');
+  await page.goto(base+'#jv=1&kind=sentence&id=a11-u01-01',{waitUntil:'domcontentloaded'});
   await page.getByText('Good morning.',{exact:true}).waitFor();
   await page.getByRole('button',{name:'Practice this sentence'}).click();
   // Export must be based on committed progress, not a navigation or practice click.
@@ -48,7 +54,7 @@ for(const engine of [chromium,firefox,webkit]){
   const d=await download;const summary=JSON.parse(await readFile(await d.path(),'utf8'));
   assert.equal(summary.schema,'thiepn.japanese.progress');assert.equal(summary.version,1);assert.equal(summary.product,'bunshou');assert.equal(summary.metrics.sentencesAvailable,620);assert.equal(summary.metrics.sentencesStudied,0);
   assert.equal(new URL(summary.resumeUrl).pathname,'/bunshou/');
-  await page.goto(base+'tests/m3-partner-fixture.html?partner=japanese');
+  await page.goto(base+'tests/m3-partner-fixture.html?partner=japanese',{waitUntil:'domcontentloaded'});
   await page.getByRole('heading',{name:'Disposable Japanese hub'}).waitFor();
   const input=page.getByLabel('Import Bunshō aggregate snapshot');
   const payload={name:'summary.json',mimeType:'application/json',buffer:Buffer.from(JSON.stringify(summary))};
@@ -63,9 +69,9 @@ for(const engine of [chromium,firefox,webkit]){
   await page.getByText('Imported device snapshot — not verified Account progress',{exact:true}).waitFor();
   await page.getByRole('link',{name:'Resume Bunshō'}).click();
   await page.getByRole('button',{name:'Export ecosystem summary'}).waitFor();
-  await page.goto(base+'#jv=1&kind=sentence&id=constructor');
+  await page.goto(base+'#jv=1&kind=sentence&id=constructor',{waitUntil:'domcontentloaded'});
   await page.getByText('0 contextual examples.',{exact:false}).waitFor();
-  await page.goto(base+'#jv=2&kind=review');
+  await page.goto(base+'#jv=2&kind=review',{waitUntil:'domcontentloaded'});
   await page.getByRole('heading',{name:'Context & Japanese ecosystem'}).waitFor();
   }catch(e){
    console.error(engine.name()+' M3 failure', {url:page.url(),body:(await page.locator('body').innerText().catch(()=>'' )).slice(0,700),diagnostics:diagnostics.slice(-20)});
