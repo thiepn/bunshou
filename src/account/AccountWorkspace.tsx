@@ -1,3 +1,4 @@
+import {emptyProgression,validProgression,type Command} from '../learning/progression';
 import {progressSummary} from '../interop/progress';
 import {getLocalDateString} from '../utils/srs';
 import {beginAttempt,finishAttempt,failureReceipt,nextDelay,statusText} from '../sync/schedule';
@@ -151,6 +152,7 @@ function ActiveWorkspace({ready,message,offline,configured,accountClient,canSync
   const row=useRef(ready.row),draft=useRef(decode(ready.row.raw)),alive=useRef(true),failed=useRef(false),queue=useRef(Promise.resolve()),pendingCount=useRef(0);
   const claiming=useRef(false);
   const [state,setState]=useState(draft.current),[pending,setPending]=useState(0),[failure,setFailure]=useState(''),[dismissed,setDismissed]=useState(false);
+  const [guided,setGuided]=useState(()=>ready.row.guided??emptyProgression());
   const [queued,setQueued]=useState(ready.row.sync?.pending.length??0);
   const [syncing,setSyncing]=useState(false),[syncMessage,setSyncMessage]=useState(''),[appEpoch,setAppEpoch]=useState(0);
   const [meta,setMeta]=useState(ready.row.sync);
@@ -164,7 +166,7 @@ function ActiveWorkspace({ready,message,offline,configured,accountClient,canSync
     const latest=await store.read(selection.owner);
     if(!alive.current||!currentRef.current())return;
     if(latest.raw!==row.current.raw){draft.current=decode(latest.raw);setState(draft.current);setAppEpoch(v=>v+1);}
-    row.current=latest;setQueued(latest.sync?.pending.length??0);setMeta(latest.sync);
+    row.current=latest;setGuided(latest.guided??emptyProgression());setQueued(latest.sync?.pending.length??0);setMeta(latest.sync);
   };
   const runSync=async(resolve?:'remote'|'local',automatic=false)=>{
     if(!fixture||!accountClient||!syncRef.current()||document.visibilityState!=='visible'||pendingCount.current||claiming.current||failed.current||!currentRef.current()||(!resolve&&row.current.sync?.conflict))return;
@@ -237,6 +239,15 @@ function ActiveWorkspace({ready,message,offline,configured,accountClient,canSync
   },[store,selection.owner,isCurrent]);
   // App's existing callbacks have stable closures. Fence every write with the live owner.
   const [stableUpdate]=useState(()=>update);
+  const guideCommand=async(command:Command)=>{
+    if(!alive.current||!currentRef.current()||failed.current||claiming.current||pendingCount.current)throw Error('GUIDED_BUSY');
+    claiming.current=true;setPending(++pendingCount.current);
+    try{
+     const next=await store.guidedCommand(selection.owner,row.current.revision,command,()=>alive.current&&currentRef.current());
+     if(!alive.current||!currentRef.current())throw Error('GUIDED_OWNER_CHANGED');
+     row.current=next;draft.current=decode(next.raw);setState(draft.current);setGuided(next.guided??emptyProgression());setMeta(next.sync);setQueued(next.sync?.pending.length??0);
+    }finally{claiming.current=false;pendingCount.current--;if(alive.current&&currentRef.current())setPending(pendingCount.current);}
+  };
   const claim=async()=>{
     if(offline||!navigator.onLine||!ready.guest||pendingCount.current||!isCurrent()||failed.current)return;
     if(!window.confirm('Move this device’s guest progress to this Account? A recovery snapshot will be retained inside this Account workspace.'))return;
@@ -245,7 +256,7 @@ function ActiveWorkspace({ready,message,offline,configured,accountClient,canSync
     catch(e){if(isCurrent())setFailure(e instanceof WorkspaceError?e.code:'Guest claim failed');}
     finally{claiming.current=false;pendingCount.current--;if(isCurrent())setPending(pendingCount.current);}
   };
-  const canClaim=!offline&&selection.owner!==GUEST&&row.current.revision===0&&!!ready.guest&&ready.guest.revision>0&&ready.guest.raw!==encode(createInitialAppState());
+  const canClaim=!offline&&selection.owner!==GUEST&&row.current.revision===0&&!!ready.guest&&ready.guest.revision>0&&(ready.guest.raw!==encode(createInitialAppState())||Object.keys(ready.guest.guided?.units??{}).length>0);
   return <>
     <section aria-label="Account and workspace" className="bg-[#FCFBF7] dark:bg-[#141923] text-stone-900 dark:text-white border-b border-stone-300 dark:border-slate-700 px-4 py-3">
       <div className="max-w-6xl mx-auto flex flex-wrap items-center gap-3">
@@ -254,6 +265,7 @@ function ActiveWorkspace({ready,message,offline,configured,accountClient,canSync
         {fixture&&<><button className={btn} disabled={syncing||offline||pending>0||!!failure||!!meta?.conflict} onClick={()=>void runSync()}>Sync now (fixture)</button><button className={btn} disabled={syncing||offline||pending>0||!!failure||canClaim} onClick={()=>void toggleAuto()}>{meta?.autoSync?'Disable automatic sync (fixture)':'Enable automatic sync (fixture)'}</button></>}
         <button className={btn} disabled={syncing||pending>0} onClick={()=>{if(isCurrent())download(row.current.raw,'bunshou-progress.json');}}>Export saved progress</button>
         <button className={btn} disabled={syncing||pending>0||!!failure} onClick={()=>{if(currentRef.current())download(JSON.stringify(progressSummary(decode(row.current.raw),getLocalDateString()),null,2),'bunshou-progress-summary-v1.json');}}>Export ecosystem summary</button>
+        {Object.keys(guided.units??{}).length>0&&<button className={btn} disabled={pending>0||syncing} onClick={()=>{if(currentRef.current())download(JSON.stringify(row.current.guided,null,2),'bunshou-guided-evidence-v1.json');}}>Export guided learning evidence</button>}
         {row.current.claimSourceRaw&&<button className={btn} disabled={pending>0} onClick={()=>{if(isCurrent())download(row.current.claimSourceRaw!,'bunshou-claimed-guest-backup.json');}}>Export claimed guest backup</button>}
         {row.current.previousRaw&&<button className={btn} disabled={pending>0} onClick={()=>{if(isCurrent())download(row.current.previousRaw!,'bunshou-previous-progress.json');}}>Export previous state</button>}
       </div>
@@ -263,6 +275,6 @@ function ActiveWorkspace({ready,message,offline,configured,accountClient,canSync
       {canClaim&&dismissed&&<button className={btn} onClick={()=>setDismissed(false)}>Review guest migration</button>}
       {failure&&<div role="alert" className="mt-3 max-w-6xl mx-auto"><p>{failure} — unsaved changes have not replaced committed progress.</p><button className={btn} onClick={()=>{if(isCurrent())download(JSON.stringify(draft.current),'bunshou-unsaved-progress.json');}}>Export unsaved progress</button> <button className={btn} onClick={()=>{if(window.confirm('Discard unsaved in-memory changes and reload the saved workspace?'))reload();}}>Reload saved workspace</button></div>}
     </section>
-    {!failure&&<div inert={claiming.current||syncing}><App key={appEpoch} appState={state} setAppState={stableUpdate}/></div>}
+    {!failure&&<div inert={claiming.current||syncing}>{validProgression(guided)?<App key={appEpoch} appState={state} setAppState={stableUpdate} guided={guided} guideCommand={guideCommand}/>:<div role="alert" className="p-4">Guided learning metadata needs recovery. Existing progress is preserved. <button className={btn} onClick={()=>{if(currentRef.current())download(JSON.stringify(row.current.guided),'bunshou-guided-recovery.json');}}>Export guided recovery</button></div>}</div>}
   </>;
 }

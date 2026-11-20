@@ -1,3 +1,5 @@
+import type {Progression,Command} from './learning/progression';
+import {GuidedLessonView} from './components/GuidedLessonView';
 import {EcosystemView} from './components/EcosystemView';
 import {parseFragment} from './interop/contract';
 import {unitExists} from './interop/corpus';
@@ -29,7 +31,8 @@ import { createInitialAppState } from './utils/storage';
 import type { SetStateAction } from 'react';
 import type {Action} from './sync/model';
 
-export default function App({appState,setAppState}: {appState: PersistedAppState; setAppState: (update:SetStateAction<PersistedAppState>, action?:Action)=>void}) {
+export default function App({appState,setAppState,guided,guideCommand}: {guided:Progression;guideCommand:(c:Command)=>Promise<void>;appState: PersistedAppState; setAppState: (update:SetStateAction<PersistedAppState>, action?:Action)=>void}) {
+  const [guidedUnit,setGuidedUnit]=useState<string|undefined>(undefined);
   const [undoStack, setUndoStack] = useState<PersistedAppState[]>([]);
 
   const [incoming,setIncoming]=useState(()=>parseFragment(window.location.hash));
@@ -268,6 +271,7 @@ export default function App({appState,setAppState}: {appState: PersistedAppState
         setLibraryInitialFilter({});
       }
       if(location.hash.startsWith('#jv=')){history.replaceState(null,'',location.pathname+location.search);setIncoming(null);}
+      if(screen==='guided')setGuidedUnit(undefined);
       setActiveScreen(screen);
     },
     [activeScreen, dueCount, appState.settings.selectedLevel]
@@ -286,6 +290,10 @@ export default function App({appState,setAppState}: {appState: PersistedAppState
     []
   );
 
+  const openGuided=useCallback((unitId?:string)=>{
+    if(location.hash.startsWith('#jv='))history.replaceState(null,'',location.pathname+location.search);
+    setGuidedUnit(unitId);setActiveScreen('guided');
+  },[]);
   const handleOpenUnitGrammar = useCallback((unitId: string) => {
     if(location.hash.startsWith('#jv='))history.replaceState(null,'',location.pathname+location.search);
     setGrammarInitialUnitId(unitId);
@@ -333,6 +341,7 @@ export default function App({appState,setAppState}: {appState: PersistedAppState
       />
 
       <main className="flex-1">
+        {activeScreen === 'guided' && <GuidedLessonView key={guidedUnit??'recommended'} state={appState} initialUnit={guidedUnit} progression={guided} command={guideCommand} onStudy={handleStartStudy}/>}
         {activeScreen === 'ecosystem' && <EcosystemView key={JSON.stringify(incoming)} initial={incoming} onPractice={handleStartStudy} onGrammar={handleOpenUnitGrammar}/>}
         {activeScreen === 'home' && (
           <HomeView
@@ -346,6 +355,7 @@ export default function App({appState,setAppState}: {appState: PersistedAppState
             onOpenUnitGrammar={handleOpenUnitGrammar}
             onNavigateToLibrary={handleNavigateToLibraryFavorites}
             onSaveOmikujiDraw={handleSaveOmikujiDraw}
+            onGuidedLesson={openGuided}
           />
         )}
 
@@ -392,6 +402,7 @@ export default function App({appState,setAppState}: {appState: PersistedAppState
             onStartStudy={handleStartStudy}
             onInspectUnitInLibrary={handleInspectUnitInLibrary}
             onOpenUnitStory={handleOpenUnitStory}
+            onGuidedLesson={openGuided}
           />
         )}
 

@@ -1,7 +1,7 @@
 name: Bunshou M1 quality (no deployment)
 on:
   pull_request:
-    branches: [main, feat/bunshou-m1-account-local-workspaces, feat/bunshou-m2-sync]
+    branches: [main, feat/bunshou-m1-account-local-workspaces, feat/bunshou-m2-sync, feat/bunshou-m3-interoperability]
   workflow_dispatch:
 permissions:
   contents: read
@@ -19,13 +19,15 @@ jobs:
           cache: npm
       - run: npm ci
       - run: node scripts/verify-m1-preservation.mjs
-      - run: npm exec -- tsx --test src/data/sentences.test.ts src/storage/workspace.test.ts src/sync/model.test.ts src/sync/schedule.test.ts src/interop/contract.test.ts
+      - run: npm exec -- tsx --test src/data/sentences.test.ts src/storage/workspace.test.ts src/sync/model.test.ts src/sync/schedule.test.ts src/interop/contract.test.ts src/learning/guided.test.ts src/learning/progression.test.ts
       - run: npm run lint
       - run: npm run build
+      - run: node scripts/package-release.mjs
       - run: npm install --prefix tests/.m1-browser-deps --no-save --package-lock=false playwright@1.56.1
-      - run: tests/.m1-browser-deps/node_modules/.bin/playwright install --with-deps chromium firefox webkit
+      - id: browsers
+        run: tests/.m1-browser-deps/node_modules/.bin/playwright install --with-deps chromium firefox webkit
       - run: |
-          npm exec -- vite --host=127.0.0.1 --port=4173 --strictPort > /tmp/bunshou-vite.log 2>&1 &
+          VITE_BUNSHOU_PARTNER_FIXTURE=true npm exec -- vite --host=127.0.0.1 --port=4173 --strictPort > /tmp/bunshou-vite.log 2>&1 &
           for i in $(seq 1 40); do
             if curl --fail --silent http://127.0.0.1:4173/bunshou/ >/dev/null; then break; fi
             sleep 1
@@ -33,7 +35,10 @@ jobs:
           node tests/m1-workspace.browser.mjs
           node tests/m2-sync.browser.mjs
           node tests/m3-interop.browser.mjs
+          node tests/m4-guided.browser.mjs
       - name: Build disposable Account fixture (not deployed)
+        id: account_fixture
+        if: ${{ !cancelled() && steps.browsers.outcome == 'success' }}
         env:
           VITE_BUNSHOU_M2_FIXTURE: 'true'
           VITE_BUNSHOU_ACCOUNT_ENABLED: 'true'
@@ -42,4 +47,25 @@ jobs:
           VITE_BUNSHOU_OAUTH_CLIENT_ID: 33333333-3333-4333-8333-333333333333
           VITE_BUNSHOU_CALLBACK_URL: https://japanese.thiepn.dev/bunshou/auth/callback/
         run: npm run build -- --outDir dist-m1-fixture
-      - run: node tests/m1-account.browser.mjs
+      - if: ${{ !cancelled() && steps.account_fixture.outcome == 'success' }}
+        run: node tests/m1-account.browser.mjs
+      - name: Build original AI Studio baseline (isolated checkout)
+        id: original
+        if: ${{ !cancelled() && steps.browsers.outcome == 'success' }}
+        run: |
+          git worktree add --detach /tmp/bunshou-original 8a1735a52fa56bdd5c11609828644b9d19d1e15b
+          # Original application source stays exact; use the candidate's tested build toolchain.
+          # Only the historical esbuild version differed in package.json.
+          cp package.json package-lock.json /tmp/bunshou-original/
+          cd /tmp/bunshou-original
+          npm ci
+          npm run build
+      - name: Verify packaged static routing and original visual foundation
+        if: ${{ !cancelled() && steps.original.outcome == 'success' }}
+        run: node tests/release-static.browser.mjs /tmp/bunshou-original/dist
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: bunshou-release-visual-evidence
+          path: release-evidence/
+          if-no-files-found: ignore

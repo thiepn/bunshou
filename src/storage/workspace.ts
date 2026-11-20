@@ -1,3 +1,5 @@
+import {applyCommand,emptyProgression,validProgression,type Progression,type Command} from '../learning/progression';
+import {getLocalDateString} from '../utils/srs';
 import {appendLocal,initialMeta,syncRelevant, type Action,type SyncMeta} from '../sync/model';
 import type { PersistedAppState } from '../types/curriculum';
 import { createInitialAppState, validateAndParseBackupJson, STORAGE_KEY } from '../utils/storage';
@@ -6,7 +8,7 @@ export const DB_NAME = 'thiepn-bunshou-workspaces-v1';
 export const GUEST = 'guest';
 export const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 export type Owner = string;
-export type Envelope = { owner: Owner; revision: number; raw: string; previousRaw?: string; legacyRaw?: string; claimedFrom?: number; claimSourceRaw?: string; sync?: SyncMeta };
+export type Envelope = { owner: Owner; revision: number; raw: string; previousRaw?: string; legacyRaw?: string; claimedFrom?: number; claimSourceRaw?: string; sync?: SyncMeta; guided?:Progression };
 type Receipt = { key: 'legacy'; raw: string | null };
 export class WorkspaceError extends Error {
   constructor(public code: string, public raw?: string, public recoveryRaw?: string) { super(code); }
@@ -91,8 +93,28 @@ export class WorkspaceStore {
       if ((current?.revision ?? 0)!==revision || (current && current.owner!==owner)) throw new WorkspaceError('REVISION_CONFLICT');
       if(current) decode(current.raw);
       if(current?.raw===raw) return current;
-      const next: Envelope={owner,revision:revision+1,raw,previousRaw:current?.raw,legacyRaw:current?.legacyRaw,claimedFrom:current?.claimedFrom,claimSourceRaw:current?.claimSourceRaw,sync:owner===GUEST?undefined:action.kind==='edit'&&!syncRelevant(current?.raw??initialRaw(),raw)?current?.sync??(current&&syncRelevant(initialRaw(),current.raw)?appendLocal(undefined,{kind:'replace'}):initialMeta()):appendLocal(current?.sync,action,!!current)};
+      const next: Envelope={owner,revision:revision+1,raw,previousRaw:current?.raw,legacyRaw:current?.legacyRaw,claimedFrom:current?.claimedFrom,claimSourceRaw:current?.claimSourceRaw,guided:current?.guided,sync:owner===GUEST?undefined:action.kind==='edit'&&!syncRelevant(current?.raw??initialRaw(),raw)?current?.sync??(current&&syncRelevant(initialRaw(),current.raw)?appendLocal(undefined,{kind:'replace'}):initialMeta()):appendLocal(current?.sync,action,!!current)};
       await request(store.put(next)); return next;
+    });
+  }
+  /** Guided evidence is device-local metadata; recording activity atomically updates v1 raw. */
+  async guidedCommand(owner:Owner,revision:number,command:Command,current:()=>boolean):Promise<Envelope>{
+    ownerCheck(owner);
+    return this.run(['states'],'readwrite',async tx=>{
+      const store=tx.objectStore('states'),row=await request<Envelope|undefined>(store.get(owner));
+      if((row?.revision??0)!==revision||(row&&row.owner!==owner)||!current())throw new WorkspaceError('GUIDED_REVISION_CONFLICT');
+      const before=row??{owner,revision:0,raw:initialRaw()};
+      const p=before.guided??emptyProgression();
+      if(!validProgression(p))throw new WorkspaceError('GUIDED_RECOVERY_REQUIRED');
+      const state=decode(before.raw),result=applyCommand(p,command,state);
+      if(result.progress===p)return before;
+      let raw=before.raw;
+      if(result.log){
+        const date=getLocalDateString(),log=state.dailyLogs[date]??{date,newStudiedCount:0,reviewsCompletedCount:0,practiceCount:0,grades:{again:0,hard:0,good:0,easy:0}};
+        state.dailyLogs[date]={...log,practiceCount:log.practiceCount+1};raw=encode(state);
+      }
+      const next:Envelope={...before,revision:revision+1,raw,guided:result.progress,previousRaw:raw===before.raw?before.previousRaw:before.raw,sync:owner===GUEST?undefined:result.log?appendLocal(before.sync,{kind:'edit'},!!row):before.sync};
+      await request(store.put(next));if(!current())throw new WorkspaceError('GUIDED_OWNER_CHANGED');return next;
     });
   }
   /** Atomically advance local state and sync receipt, fenced by owner and local revision. */
@@ -138,9 +160,9 @@ export class WorkspaceStore {
       const store=tx.objectStore('states');
       const guest=await request<Envelope|undefined>(store.get(GUEST));
       const target=await request<Envelope|undefined>(store.get(owner));
-      if(!guest || guest.revision!==guestRevision || (target?.revision??0)!==targetRevision || target || guest.raw===initialRaw() || !stillAuthorized()) throw new WorkspaceError('CLAIM_CONFLICT');
+      if(!guest || guest.revision!==guestRevision || (target?.revision??0)!==targetRevision || target || (guest.raw===initialRaw()&&!Object.keys(guest.guided?.units??{}).length) || !stillAuthorized()) throw new WorkspaceError('CLAIM_CONFLICT');
       decode(guest.raw);
-      const next: Envelope={owner,revision:1,raw:guest.raw,legacyRaw:guest.legacyRaw,claimedFrom:guestRevision,claimSourceRaw:guest.raw,sync:appendLocal(undefined,{kind:'replace'})};
+      const next: Envelope={owner,revision:1,raw:guest.raw,legacyRaw:guest.legacyRaw,claimedFrom:guestRevision,claimSourceRaw:guest.raw,guided:guest.guided,sync:appendLocal(undefined,{kind:'replace'})};
       await request(store.add(next));
       await request(store.put({owner:GUEST,revision:guest.revision+1,raw:initialRaw(),claimedFrom:guestRevision} satisfies Envelope));
       if(!stillAuthorized()) throw new WorkspaceError('CLAIM_CANCELLED');
