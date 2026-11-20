@@ -24,21 +24,8 @@ jobs:
       - run: npm run build
       - run: node scripts/package-release.mjs
       - run: npm install --prefix tests/.m1-browser-deps --no-save --package-lock=false playwright@1.56.1
-      - run: tests/.m1-browser-deps/node_modules/.bin/playwright install --with-deps chromium firefox webkit
-      - name: Build original AI Studio baseline (isolated checkout)
-        run: |
-          git worktree add --detach /tmp/bunshou-original 8a1735a52fa56bdd5c11609828644b9d19d1e15b
-          cd /tmp/bunshou-original
-          npm ci
-          npm run build
-      - name: Verify packaged static routing and original visual foundation
-        run: node tests/release-static.browser.mjs /tmp/bunshou-original/dist
-      - uses: actions/upload-artifact@v4
-        if: always()
-        with:
-          name: bunshou-release-visual-evidence
-          path: release-evidence/
-          if-no-files-found: ignore
+      - id: browsers
+        run: tests/.m1-browser-deps/node_modules/.bin/playwright install --with-deps chromium firefox webkit
       - run: |
           VITE_BUNSHOU_PARTNER_FIXTURE=true npm exec -- vite --host=127.0.0.1 --port=4173 --strictPort > /tmp/bunshou-vite.log 2>&1 &
           for i in $(seq 1 40); do
@@ -50,6 +37,8 @@ jobs:
           node tests/m3-interop.browser.mjs
           node tests/m4-guided.browser.mjs
       - name: Build disposable Account fixture (not deployed)
+        id: account_fixture
+        if: ${{ !cancelled() && steps.browsers.outcome == 'success' }}
         env:
           VITE_BUNSHOU_M2_FIXTURE: 'true'
           VITE_BUNSHOU_ACCOUNT_ENABLED: 'true'
@@ -58,4 +47,25 @@ jobs:
           VITE_BUNSHOU_OAUTH_CLIENT_ID: 33333333-3333-4333-8333-333333333333
           VITE_BUNSHOU_CALLBACK_URL: https://japanese.thiepn.dev/bunshou/auth/callback/
         run: npm run build -- --outDir dist-m1-fixture
-      - run: node tests/m1-account.browser.mjs
+      - if: ${{ !cancelled() && steps.account_fixture.outcome == 'success' }}
+        run: node tests/m1-account.browser.mjs
+      - name: Build original AI Studio baseline (isolated checkout)
+        id: original
+        if: ${{ !cancelled() && steps.browsers.outcome == 'success' }}
+        run: |
+          git worktree add --detach /tmp/bunshou-original 8a1735a52fa56bdd5c11609828644b9d19d1e15b
+          # Original application source stays exact; use the candidate's tested build toolchain.
+          # Only the historical esbuild version differed in package.json.
+          cp package.json package-lock.json /tmp/bunshou-original/
+          cd /tmp/bunshou-original
+          npm ci
+          npm run build
+      - name: Verify packaged static routing and original visual foundation
+        if: ${{ !cancelled() && steps.original.outcome == 'success' }}
+        run: node tests/release-static.browser.mjs /tmp/bunshou-original/dist
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: bunshou-release-visual-evidence
+          path: release-evidence/
+          if-no-files-found: ignore
