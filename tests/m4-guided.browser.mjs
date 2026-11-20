@@ -36,7 +36,7 @@ for(const engine of [chromium,firefox,webkit]){
    // Require both the old feedback to go away and the new persisted step/summary.
    await button.waitFor({state:'detached'});
    await page.waitForFunction(old=>Array.from(document.querySelectorAll('section[aria-label="Guided learning"] span')).some(s=>/ · [1-6]\/6$/.test(s.textContent??'')&&s.textContent!==old)||Array.from(document.querySelectorAll('h2')).some(h=>h.textContent==='Guided practice results'),before);
-   await page.getByText('Saved on this device',{exact:false}).waitFor();
+   await page.getByRole('region',{name:'Account and workspace'}).getByRole('status').filter({hasText:/^Saved on this device/}).waitFor();
   };
   await page.getByRole('button',{name:'Start guided exercises'}).click();
   await page.getByText('Grammar check · 1/6',{exact:true}).waitFor();
@@ -87,7 +87,7 @@ for(const engine of [chromium,firefox,webkit]){
   await page.getByText('First pass: 4/6 model matches or correct answers; 1 assisted; 1 missed.',{exact:true}).waitFor();
   await page.getByRole('button',{name:'Record completed practice session'}).click();
   await page.getByRole('button',{name:'Practice activity recorded'}).waitFor();
-  await page.getByText('Saved on this device',{exact:false}).waitFor();
+  await page.getByRole('region',{name:'Account and workspace'}).getByRole('status').filter({hasText:/^Saved on this device/}).waitFor();
   const pending=page.waitForEvent('download');await page.getByRole('button',{name:'Export saved progress'}).click();
   const d=await pending;const saved=JSON.parse(await readFile(await d.path(),'utf8'));
   assert.equal(Object.keys(saved.records).length,0);
